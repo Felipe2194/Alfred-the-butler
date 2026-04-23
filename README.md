@@ -1,4 +1,4 @@
-# LifeCheck
+# Alfred you Butler
 
 ![Alfred walking on your desktop](assets/alfred.png)
 
