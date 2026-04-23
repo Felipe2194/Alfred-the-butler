@@ -1,0 +1,21 @@
+{
+  "name": "lifecheck",
+  "version": "1.0.0",
+  "description": "Alfred te recuerda todo lo que olvidas",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^41.3.0"
+  },
+  "dependencies": {
+    "electron-store": "^11.0.2",
+    "jimp": "^1.6.1",
+    "node-schedule": "^2.1.1"
+  }
+}

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 120px;
+    height: 220px;
+    background: transparent;
+    overflow: visible;
+    user-select: none;
+    -webkit-app-region: no-drag;
+  }
+
+  /* ── Burbuja ── */
+  #bubble {
+    position: fixed;
+    bottom: 218px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #fff;
+    border: 2px solid #1a1a1a;
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    color: #111;
+    white-space: pre-wrap;
+    width: 260px;
+    box-shadow: 3px 3px 0 #1a1a1a;
+    z-index: 999;
+    display: none;
+    line-height: 1.5;
+    pointer-events: none;
+  }
+  #bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1a1a1a;
+  }
+  #bubble.visible {
+    display: block;
+    animation: popIn .25s cubic-bezier(.34,1.56,.64,1) both;
+  }
+  @keyframes popIn {
+    from { opacity:0; transform: translateX(-50%) scale(.85) translateY(6px); }
+    to   { opacity:1; transform: translateX(-50%) scale(1)  translateY(0);   }
+  }
+
+  /* ── Sprite wrapper ── */
+  #alfred-wrap {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    cursor: pointer;
+    width: 112px;
+    height: 112px;
+  }
+
+  /* ── Sprites ── */
+  .alfred-sprite {
+    position: absolute;
+    top: 0; left: 0;
+    width: 112px;
+    height: 112px;
+    image-rendering: pixelated;
+    transition: opacity .1s;
+  }
+
+  /* Idle: float suave */
+  #spr-idle {
+    animation: float 3s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50%       { transform: translateY(-4px); }
+  }
+
+  /* Walk: sin float extra (se mueve por la ventana) */
+  #spr-walk { display: none; }
+
+  /* Direccion: flip CSS cuando camina hacia la derecha */
+  #alfred-wrap.facing-right .alfred-sprite {
+    transform: scaleX(-1);
+  }
+  /* Anular el float del idle cuando esta mirando derecha tb */
+  #alfred-wrap.facing-right #spr-idle {
+    animation: float-flip 3s ease-in-out infinite;
+  }
+  @keyframes float-flip {
+    0%, 100% { transform: scaleX(-1) translateY(0); }
+    50%       { transform: scaleX(-1) translateY(-4px); }
+  }
+
+  /* Hablando: idle + wobble */
+  #alfred-wrap.talking #spr-idle {
+    animation: talk 0.45s ease-in-out infinite;
+  }
+  @keyframes talk {
+    0%, 100% { transform: translateY(0) rotate(0deg);    }
+    25%       { transform: translateY(-3px) rotate(-1.5deg); }
+    75%       { transform: translateY(-3px) rotate(1.5deg);  }
+  }
+  #alfred-wrap.talking.facing-right #spr-idle {
+    animation: talk-flip 0.45s ease-in-out infinite;
+  }
+  @keyframes talk-flip {
+    0%, 100% { transform: scaleX(-1) translateY(0) rotate(0deg);    }
+    25%       { transform: scaleX(-1) translateY(-3px) rotate(-1.5deg); }
+    75%       { transform: scaleX(-1) translateY(-3px) rotate(1.5deg);  }
+  }
+
+  /* Hover */
+  #alfred-wrap:hover .alfred-sprite { filter: brightness(1.1); }
+</style>
+</head>
+<body>
+
+<div id="bubble"></div>
+
+<div id="alfred-wrap" id="wrap" title="Click para abrir panel">
+  <img id="spr-idle" class="alfred-sprite" src="../assets/alfred.png"      alt="" draggable="false">
+  <img id="spr-walk" class="alfred-sprite" src="../assets/alfred-walk.png" alt="" draggable="false">
+</div>
+
+<script>
+const { ipcRenderer } = require('electron');
+
+const wrap    = document.getElementById('alfred-wrap');
+const sprIdle = document.getElementById('spr-idle');
+const sprWalk = document.getElementById('spr-walk');
+const bubble  = document.getElementById('bubble');
+
+// ─── Estado ────────────────────────────────────────────────────────────────
+let state   = 'walk';  // 'walk' | 'idle' | 'talk'
+let dir     = -1;      // -1=izq, +1=der
+let walkFrame = 0;     // alterna 0/1 en cada tick para simular pasos
+
+// ─── Mostrar sprite correcto ────────────────────────────────────────────────
+function updateSprite() {
+  const walking = (state === 'walk');
+  // Alternar idle/walk cada ~6 ticks para simular ciclo de paso
+  const showWalk = walking && (walkFrame % 12 < 6);
+
+  sprIdle.style.display = showWalk ? 'none' : 'block';
+  sprWalk.style.display = showWalk ? 'block' : 'none';
+
+  // Direccion
+  if (dir > 0) wrap.classList.add('facing-right');
+  else          wrap.classList.remove('facing-right');
+
+  // Talking
+  if (state === 'talk') wrap.classList.add('talking');
+  else                   wrap.classList.remove('talking');
+}
+
+// ─── IPC desde main ────────────────────────────────────────────────────────
+ipcRenderer.on('walk-tick', () => {
+  walkFrame++;
+  updateSprite();
+});
+
+ipcRenderer.on('set-dir', (_, newDir) => {
+  dir = newDir;
+  updateSprite();
+});
+
+ipcRenderer.on('set-state', (_, newState) => {
+  state = newState;
+  walkFrame = 0;
+  updateSprite();
+});
+
+// ─── Burbuja ───────────────────────────────────────────────────────────────
+let bubbleTimer = null;
+
+function showBubble(text) {
+  bubble.textContent = text;
+  bubble.classList.add('visible');
+
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  const ms = 4000 + text.split('\n').length * 1200;
+  bubbleTimer = setTimeout(() => bubble.classList.remove('visible'), ms);
+}
+
+ipcRenderer.on('speak', (_, text) => {
+  state = 'talk';
+  updateSprite();
+  showBubble(text);
+});
+
+// ─── Click → dashboard ─────────────────────────────────────────────────────
+wrap.addEventListener('click', () => ipcRenderer.invoke('open-dash'));
+
+// Estado inicial
+updateSprite();
+</script>
+</body>
+</html>

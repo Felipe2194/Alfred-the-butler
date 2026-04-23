@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LifeCheck</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --accent: #e94560;
+    --accent2: #0f3460;
+    --text: #eaeaea;
+    --muted: #888;
+    --green: #4caf50;
+    --yellow: #ffb300;
+    --red: #e94560;
+    --pixel: 'Courier New', monospace;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: var(--pixel);
+    background: var(--bg);
+    color: var(--text);
+    height: 620px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+  }
+
+  #titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--accent2);
+    -webkit-app-region: drag;
+    cursor: default;
+  }
+  #titlebar h1 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; }
+  #titlebar span { font-size: 11px; color: var(--muted); }
+  #close-btn {
+    -webkit-app-region: no-drag;
+    cursor: pointer;
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    width: 20px; height: 20px;
+    border-radius: 4px;
+    font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  #tabs {
+    display: flex;
+    background: var(--card);
+    border-bottom: 1px solid #333;
+  }
+  .tab {
+    flex: 1;
+    padding: 8px 4px;
+    font-size: 10px;
+    text-align: center;
+    cursor: pointer;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-bottom: 2px solid transparent;
+    transition: all .2s;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  #content { flex: 1; overflow-y: auto; padding: 12px; }
+  #content::-webkit-scrollbar { width: 4px; }
+  #content::-webkit-scrollbar-track { background: var(--card); }
+  #content::-webkit-scrollbar-thumb { background: var(--accent2); border-radius: 2px; }
+
+  .section-title {
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin: 12px 0 6px;
+    border-bottom: 1px solid #333;
+    padding-bottom: 4px;
+  }
+
+  .item-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    transition: opacity .2s;
+  }
+  .item-card:hover { opacity: .85; }
+  .item-card.urgent  { border-left-color: var(--red); }
+  .item-card.warning { border-left-color: var(--yellow); }
+  .item-card.ok      { border-left-color: var(--green); }
+  .item-card.expired { border-left-color: #555; opacity: .7; }
+
+  .item-emoji { font-size: 18px; }
+  .item-info  { flex: 1; }
+  .item-name  { font-size: 11px; font-weight: bold; }
+  .item-sub   { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .item-badge {
+    font-size: 9px; padding: 2px 6px;
+    border-radius: 4px; font-weight: bold; letter-spacing: 1px;
+  }
+  .badge-red    { background: var(--red);    color: #fff; }
+  .badge-yellow { background: var(--yellow); color: #111; }
+  .badge-green  { background: var(--green);  color: #fff; }
+  .badge-gray   { background: #555;          color: #ccc; }
+
+  .empty-state {
+    text-align: center; color: var(--muted);
+    font-size: 11px; padding: 20px;
+  }
+
+  .form-group { margin-bottom: 12px; }
+  .form-group label {
+    display: block; font-size: 10px; color: var(--muted);
+    margin-bottom: 4px; letter-spacing: 1px;
+  }
+  .form-group input, .form-group select {
+    width: 100%;
+    background: var(--card); border: 1px solid #333; border-radius: 6px;
+    color: var(--text); font-family: var(--pixel); font-size: 11px;
+    padding: 7px 10px; outline: none; transition: border-color .2s;
+  }
+  .form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+  .form-group select option { background: var(--card); }
+
+  .btn {
+    padding: 8px 16px; border-radius: 6px; border: none;
+    font-family: var(--pixel); font-size: 11px;
+    cursor: pointer; letter-spacing: 1px; transition: opacity .2s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn-primary   { background: var(--accent); color: #fff; }
+  .btn-secondary { background: #333; color: var(--text); }
+  .btn-danger    { background: #c62828; color: #fff; font-size: 10px; padding: 4px 8px; }
+  .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+
+  /* Settings tab */
+  .setting-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 0; border-bottom: 1px solid #222; font-size: 11px;
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-label { color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+  .setting-row input {
+    background: var(--card); border: 1px solid #333; border-radius: 6px;
+    color: var(--text); font-family: var(--pixel); font-size: 11px;
+    padding: 5px 8px; outline: none; width: 180px;
+  }
+  .setting-row input:focus { border-color: var(--accent); }
+
+  /* Alfred bar */
+  #dash-alfred {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--accent2); border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 12px;
+  }
+  #dash-alfred img {
+    image-rendering: pixelated; width: 48px; height: 48px; flex-shrink: 0;
+  }
+  #dash-alfred .speech { font-size: 11px; color: var(--text); line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="titlebar">
+  <h1>&#9830; LifeCheck</h1>
+  <span>Alfred at your service</span>
+  <button id="close-btn" onclick="window.close()">✕</button>
+</div>
+
+<div id="tabs">
+  <div class="tab active" data-tab="dash">Today</div>
+  <div class="tab" data-tab="all">All</div>
+  <div class="tab" data-tab="add">+ Add</div>
+  <div class="tab" data-tab="settings">Settings</div>
+</div>
+
+<div id="content">
+
+  <!-- TODAY TAB -->
+  <div id="tab-dash">
+    <div id="dash-alfred">
+      <img src="../assets/alfred.png" alt="Alfred">
+      <div class="speech" id="alfred-speech">Good day. Here is your daily briefing, sir.</div>
+    </div>
+    <div id="dash-urgent"></div>
+    <div id="dash-upcoming"></div>
+    <div id="dash-ok"></div>
+  </div>
+
+  <!-- ALL TAB -->
+  <div id="tab-all" style="display:none">
+    <div id="all-list"></div>
+  </div>
+
+  <!-- ADD TAB -->
+  <div id="tab-add" style="display:none">
+    <div class="section-title">New Reminder</div>
+    <div class="form-group">
+      <label>NAME</label>
+      <input type="text" id="f-name" placeholder="e.g. Renew passport">
+    </div>
+    <div class="form-group">
+      <label>CATEGORY</label>
+      <select id="f-cat">
+        <option value="document">📄 Document</option>
+        <option value="vehicle">🚗 Vehicle</option>
+        <option value="health">💊 Health / Gym</option>
+        <option value="birthday">🎂 Birthday</option>
+        <option value="subscription">💳 Subscription / Bill</option>
+        <option value="other">📌 Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>DUE DATE / EVENT DATE</label>
+      <input type="date" id="f-date">
+    </div>
+    <div class="form-group">
+      <label>REMIND ME (days in advance)</label>
+      <select id="f-alert">
+        <option value="1">1 day</option>
+        <option value="3">3 days</option>
+        <option value="7" selected>7 days</option>
+        <option value="14">14 days</option>
+        <option value="30">30 days</option>
+        <option value="60">60 days</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>NOTE (optional)</label>
+      <input type="text" id="f-note" placeholder="e.g. Book appointment first">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="save-btn">SAVE</button>
+      <button class="btn btn-secondary" id="cancel-btn">CANCEL</button>
+    </div>
+  </div>
+
+  <!-- SETTINGS TAB -->
+  <div id="tab-settings" style="display:none">
+    <div class="section-title">Preferences</div>
+    <div class="setting-row">
+      <span class="setting-label">Your name</span>
+      <input type="text" id="s-name" placeholder="e.g. Bruce">
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">Version</span>
+      <span style="color:var(--muted)">1.0.0</span>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">Data file</span>
+      <span style="color:var(--muted);font-size:9px" id="s-datapath">—</span>
+    </div>
+    <div style="margin-top:16px">
+      <button class="btn btn-primary" id="settings-save-btn">SAVE SETTINGS</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const { ipcRenderer } = require('electron');
+
+const CAT_EMOJI = {
+  document: '📄', vehicle: '🚗', health: '💊',
+  birthday: '🎂', subscription: '💳', other: '📌',
+  // legacy spanish keys
+  documento: '📄', vehiculo: '🚗', salud: '💊',
+  cumpleanos: '🎂', suscripcion: '💳', otro: '📌',
+};
+
+function getDaysUntil(dateStr) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const target = new Date(dateStr); target.setHours(0,0,0,0);
+  return Math.ceil((target - today) / 86400000);
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function badgeFor(days, alertDays) {
+  if (days < 0)          return ['EXPIRED', 'badge-gray'];
+  if (days === 0)        return ['TODAY',   'badge-red'];
+  if (days <= 3)         return [`${days}d`, 'badge-red'];
+  if (days <= alertDays) return [`${days}d`, 'badge-yellow'];
+  return [`${days}d`, 'badge-green'];
+}
+
+function cardClass(days, alertDays) {
+  if (days < 0)          return 'expired';
+  if (days <= 3)         return 'urgent';
+  if (days <= alertDays) return 'warning';
+  return 'ok';
+}
+
+function alfredLine(items, name) {
+  const expired = items.filter(i => getDaysUntil(i.date) < 0);
+  const urgent  = items.filter(i => { const d = getDaysUntil(i.date); return d >= 0 && d <= (i.alertDays ?? 7); });
+  const sir = name ? name : 'sir';
+  if (expired.length > 0)
+    return `${sir}, you have ${expired.length} expired item${expired.length > 1 ? 's' : ''}. Immediate attention required.`;
+  if (urgent.length > 0)
+    return `${urgent.length} upcoming reminder${urgent.length > 1 ? 's' : ''}, ${sir}. I shall keep you informed.`;
+  return `Everything is in order, ${sir}. Have an excellent day.`;
+}
+
+let data  = { items: [], name: '' };
+let editId = null;
+
+async function loadAndRender() {
+  data = await ipcRenderer.invoke('get-data');
+  renderDash();
+  renderAll();
+  loadSettings();
+}
+
+function getUserName() {
+  return data.name ? data.name : 'sir';
+}
+
+function renderDash() {
+  const items = (data.items || []).filter(i => i.date);
+  document.getElementById('alfred-speech').textContent = alfredLine(items, getUserName());
+
+  const expired = items.filter(i => getDaysUntil(i.date) < 0);
+  const urgent  = items.filter(i => { const d = getDaysUntil(i.date); return d >= 0 && d <= 3; });
+  const warning = items.filter(i => { const d = getDaysUntil(i.date); return d > 3 && d <= (i.alertDays ?? 7); });
+  const ok      = items.filter(i => getDaysUntil(i.date) > (i.alertDays ?? 7));
+
+  function section(title, arr, container) {
+    const el = document.getElementById(container);
+    if (!arr.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="section-title">${title}</div>` + arr.map(itemCard).join('');
+  }
+
+  section('🚨 Expired',   expired,                 'dash-urgent');
+  section('⚡ Upcoming',  [...urgent, ...warning],  'dash-upcoming');
+  section('✅ All clear', ok,                       'dash-ok');
+
+  if (!items.length) {
+    document.getElementById('dash-urgent').innerHTML =
+      '<div class="empty-state">No reminders yet.<br>Press "+ Add" to get started.</div>';
+  }
+}
+
+function itemCard(item) {
+  const days = getDaysUntil(item.date);
+  const [label, badgeClass] = badgeFor(days, item.alertDays ?? 7);
+  const cls   = cardClass(days, item.alertDays ?? 7);
+  const emoji = CAT_EMOJI[item.category] || '📌';
+  return `<div class="item-card ${cls}" onclick="editItem('${item.id}')">
+    <span class="item-emoji">${emoji}</span>
+    <div class="item-info">
+      <div class="item-name">${item.name}</div>
+      <div class="item-sub">${formatDate(item.date)}${item.note ? ' — ' + item.note : ''}</div>
+    </div>
+    <span class="item-badge ${badgeClass}">${label}</span>
+  </div>`;
+}
+
+function renderAll() {
+  const items = [...(data.items || [])].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const el = document.getElementById('all-list');
+  el.innerHTML = items.length
+    ? items.map(itemCard).join('')
+    : '<div class="empty-state">No reminders yet.</div>';
+}
+
+// ─── Tabs ───────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('#content > div').forEach(d => d.style.display = 'none');
+  document.getElementById('tab-' + name).style.display = 'block';
+}
+
+document.querySelectorAll('.tab').forEach(tab =>
+  tab.addEventListener('click', () => {
+    switchTab(tab.dataset.tab);
+    if (tab.dataset.tab === 'add' && !editId) resetForm();
+  })
+);
+
+// ─── Form ───────────────────────────────────────────────────────────────────
+function resetForm() {
+  editId = null;
+  document.getElementById('f-name').value  = '';
+  document.getElementById('f-cat').value   = 'document';
+  document.getElementById('f-date').value  = '';
+  document.getElementById('f-alert').value = '7';
+  document.getElementById('f-note').value  = '';
+  document.querySelector('#tab-add .section-title').textContent = 'New Reminder';
+  const d = document.getElementById('delete-btn');
+  if (d) d.remove();
+}
+
+function editItem(id) {
+  const item = data.items.find(i => i.id === id);
+  if (!item) return;
+  editId = id;
+  switchTab('add');
+  document.querySelector('#tab-add .section-title').textContent = 'Edit Reminder';
+  document.getElementById('f-name').value  = item.name;
+  document.getElementById('f-cat').value   = item.category;
+  document.getElementById('f-date').value  = item.date;
+  document.getElementById('f-alert').value = String(item.alertDays ?? 7);
+  document.getElementById('f-note').value  = item.note || '';
+
+  if (!document.getElementById('delete-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'delete-btn'; btn.className = 'btn btn-danger';
+    btn.textContent = 'DELETE'; btn.onclick = deleteItem;
+    document.querySelector('.btn-row').appendChild(btn);
+  }
+}
+
+async function deleteItem() {
+  if (!editId) return;
+  data.items = data.items.filter(i => i.id !== editId);
+  await ipcRenderer.invoke('save-data', data);
+  resetForm(); loadAndRender(); switchTab('all');
+}
+
+document.getElementById('save-btn').addEventListener('click', async () => {
+  const name = document.getElementById('f-name').value.trim();
+  const date = document.getElementById('f-date').value;
+  document.getElementById('f-name').style.borderColor = name ? '#333' : 'var(--red)';
+  document.getElementById('f-date').style.borderColor = date ? '#333' : 'var(--red)';
+  if (!name || !date) return;
+
+  const item = {
+    id: editId || Date.now().toString(),
+    name,
+    category:  document.getElementById('f-cat').value,
+    date,
+    alertDays: parseInt(document.getElementById('f-alert').value),
+    note:      document.getElementById('f-note').value.trim(),
+  };
+
+  if (editId) {
+    const idx = data.items.findIndex(i => i.id === editId);
+    if (idx !== -1) data.items[idx] = item;
+  } else {
+    data.items.push(item);
+  }
+
+  await ipcRenderer.invoke('save-data', data);
+  resetForm(); loadAndRender(); switchTab('dash');
+});
+
+document.getElementById('cancel-btn').addEventListener('click', () => {
+  resetForm(); switchTab('dash');
+});
+
+// ─── Settings ───────────────────────────────────────────────────────────────
+function loadSettings() {
+  document.getElementById('s-name').value = data.name || '';
+  ipcRenderer.invoke('get-data-path').then(p => {
+    document.getElementById('s-datapath').textContent = p;
+  });
+}
+
+document.getElementById('settings-save-btn').addEventListener('click', async () => {
+  data.name = document.getElementById('s-name').value.trim();
+  await ipcRenderer.invoke('save-data', data);
+  renderDash();
+  ipcRenderer.invoke('update-name', data.name);
+  document.getElementById('settings-save-btn').textContent = 'SAVED ✓';
+  setTimeout(() => document.getElementById('settings-save-btn').textContent = 'SAVE SETTINGS', 1500);
+});
+
+loadAndRender();
+</script>
+</body>
+</html>
