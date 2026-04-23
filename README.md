@@ -104,7 +104,7 @@ Inspired by [lil-agents](https://github.com/ryanstephen/lil-agents) — AI compa
 
 ## license
 
-MIT — do whatever you want with it.
+Do whatever you want with it.
 
 ---
 
