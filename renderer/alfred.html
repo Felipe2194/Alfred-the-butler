@@ -2,19 +2,35 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<!--
+  alfred.html — Floating character window
+  ========================================
+  This is a transparent, frameless Electron window that renders Alfred
+  and his speech bubble. No framework — pure HTML/CSS/JS.
+
+  HOW TO CONTRIBUTE:
+  - Add new states (e.g. 'wave')  → add a CSS @keyframes + handle in setState()
+  - Change animation speed        → edit --walk-speed and --talk-speed variables
+  - Change bubble style           → edit #bubble styles
+-->
 <style>
+  :root {
+    --walk-speed: 0.45s;   /* sprite cycle speed while walking */
+    --talk-speed: 0.4s;    /* wobble speed while talking       */
+    --float-speed: 3s;     /* idle floating speed              */
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   html, body {
-    width: 120px;
-    height: 220px;
+    width: 120px; height: 220px;
     background: transparent;
     overflow: visible;
     user-select: none;
     -webkit-app-region: no-drag;
   }
 
-  /* ── Burbuja ── */
+  /* ── Speech bubble ──────────────────────────────────────────────────────── */
   #bubble {
     position: fixed;
     bottom: 218px;
@@ -30,177 +46,148 @@
     white-space: pre-wrap;
     width: 260px;
     box-shadow: 3px 3px 0 #1a1a1a;
-    z-index: 999;
-    display: none;
     line-height: 1.5;
     pointer-events: none;
+    display: none;
+    z-index: 999;
   }
+  /* Tail of the bubble */
   #bubble::after {
     content: '';
     position: absolute;
-    bottom: -10px;
-    left: 50%;
+    bottom: -10px; left: 50%;
     transform: translateX(-50%);
     border: 5px solid transparent;
     border-top-color: #1a1a1a;
   }
   #bubble.visible {
     display: block;
-    animation: popIn .25s cubic-bezier(.34,1.56,.64,1) both;
+    animation: pop-in .25s cubic-bezier(.34,1.56,.64,1) both;
   }
-  @keyframes popIn {
-    from { opacity:0; transform: translateX(-50%) scale(.85) translateY(6px); }
-    to   { opacity:1; transform: translateX(-50%) scale(1)  translateY(0);   }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateX(-50%) scale(.85) translateY(6px); }
+    to   { opacity: 1; transform: translateX(-50%) scale(1)  translateY(0);   }
   }
 
-  /* ── Sprite wrapper ── */
+  /* ── Sprite container ───────────────────────────────────────────────────── */
   #alfred-wrap {
     position: absolute;
-    bottom: 0;
-    left: 50%;
+    bottom: 0; left: 50%;
     transform: translateX(-50%);
+    width: 112px; height: 112px;
     cursor: pointer;
-    width: 112px;
-    height: 112px;
   }
 
-  /* ── Sprites ── */
-  .alfred-sprite {
+  /* Both sprites stacked on top of each other */
+  .spr {
     position: absolute;
     top: 0; left: 0;
-    width: 112px;
-    height: 112px;
+    width: 112px; height: 112px;
     image-rendering: pixelated;
-    transition: opacity .1s;
   }
 
-  /* Idle: float suave */
-  #spr-idle {
-    animation: float 3s ease-in-out infinite;
-  }
+  /* ── Idle animation: gentle float ───────────────────────────────────────── */
   @keyframes float {
-    0%, 100% { transform: translateY(0); }
+    0%, 100% { transform: translateY(0);    }
     50%       { transform: translateY(-4px); }
   }
 
-  /* Walk: sin float extra (se mueve por la ventana) */
-  #spr-walk { display: none; }
-
-  /* Direccion: flip CSS cuando camina hacia la derecha */
-  #alfred-wrap.facing-right .alfred-sprite {
-    transform: scaleX(-1);
-  }
-  /* Anular el float del idle cuando esta mirando derecha tb */
-  #alfred-wrap.facing-right #spr-idle {
-    animation: float-flip 3s ease-in-out infinite;
-  }
-  @keyframes float-flip {
-    0%, 100% { transform: scaleX(-1) translateY(0); }
-    50%       { transform: scaleX(-1) translateY(-4px); }
+  /* ── Walk animation: CSS cycles between idle/walk sprites ───────────────── */
+  /* This replaces the old JS walk-tick IPC (was 33 calls/sec → now 0).       */
+  /* The idle sprite fades in/out on a stepped cycle; walk sprite is inverse.  */
+  @keyframes sprite-cycle {
+    0%, 49.9% { opacity: 1; }
+    50%, 100%  { opacity: 0; }
   }
 
-  /* Hablando: idle + wobble */
-  #alfred-wrap.talking #spr-idle {
-    animation: talk 0.45s ease-in-out infinite;
-  }
+  /* ── Talk animation: head wobble ────────────────────────────────────────── */
   @keyframes talk {
-    0%, 100% { transform: translateY(0) rotate(0deg);    }
+    0%, 100% { transform: translateY(0)    rotate(0deg);    }
     25%       { transform: translateY(-3px) rotate(-1.5deg); }
     75%       { transform: translateY(-3px) rotate(1.5deg);  }
   }
-  #alfred-wrap.talking.facing-right #spr-idle {
-    animation: talk-flip 0.45s ease-in-out infinite;
+
+  /* ── State: idle (default) ───────────────────────────────────────────────── */
+  #spr-idle { animation: float var(--float-speed) ease-in-out infinite; }
+  #spr-walk { display: none; }
+
+  /* ── State: walking ──────────────────────────────────────────────────────── */
+  #alfred-wrap.walking #spr-idle {
+    display: block;
+    animation: sprite-cycle var(--walk-speed) steps(1, end) infinite;
   }
-  @keyframes talk-flip {
-    0%, 100% { transform: scaleX(-1) translateY(0) rotate(0deg);    }
-    25%       { transform: scaleX(-1) translateY(-3px) rotate(-1.5deg); }
-    75%       { transform: scaleX(-1) translateY(-3px) rotate(1.5deg);  }
+  #alfred-wrap.walking #spr-walk {
+    display: block;
+    animation: sprite-cycle var(--walk-speed) steps(1, end) infinite reverse;
   }
 
-  /* Hover */
-  #alfred-wrap:hover .alfred-sprite { filter: brightness(1.1); }
+  /* ── State: talking ──────────────────────────────────────────────────────── */
+  #alfred-wrap.talking #spr-idle {
+    animation: talk var(--talk-speed) ease-in-out infinite;
+  }
+  #alfred-wrap.talking #spr-walk { display: none; }
+
+  /* ── Direction: facing right (mirror all sprites via parent) ─────────────── */
+  #alfred-wrap.facing-right { transform: translateX(-50%) scaleX(-1); }
+
+  /* Hover highlight */
+  #alfred-wrap:hover .spr { filter: brightness(1.12); }
 </style>
 </head>
 <body>
 
 <div id="bubble"></div>
 
-<div id="alfred-wrap" id="wrap" title="Click para abrir panel">
-  <img id="spr-idle" class="alfred-sprite" src="../assets/alfred.png"      alt="" draggable="false">
-  <img id="spr-walk" class="alfred-sprite" src="../assets/alfred-walk.png" alt="" draggable="false">
+<div id="alfred-wrap" title="Click to open dashboard">
+  <img id="spr-idle" class="spr" src="../assets/alfred.png"      alt="" draggable="false">
+  <img id="spr-walk" class="spr" src="../assets/alfred-walk.png" alt="" draggable="false">
 </div>
 
 <script>
+'use strict';
 const { ipcRenderer } = require('electron');
 
-const wrap    = document.getElementById('alfred-wrap');
-const sprIdle = document.getElementById('spr-idle');
-const sprWalk = document.getElementById('spr-walk');
-const bubble  = document.getElementById('bubble');
+const wrap   = document.getElementById('alfred-wrap');
+const bubble = document.getElementById('bubble');
 
-// ─── Estado ────────────────────────────────────────────────────────────────
-let state   = 'walk';  // 'walk' | 'idle' | 'talk'
-let dir     = -1;      // -1=izq, +1=der
-let walkFrame = 0;     // alterna 0/1 en cada tick para simular pasos
+// ── State machine ─────────────────────────────────────────────────────────────
+// States: 'idle' | 'walk' | 'talk'
+// All visual changes are driven by CSS classes — no JS style manipulation.
 
-// ─── Mostrar sprite correcto ────────────────────────────────────────────────
-function updateSprite() {
-  const walking = (state === 'walk');
-  // Alternar idle/walk cada ~6 ticks para simular ciclo de paso
-  const showWalk = walking && (walkFrame % 12 < 6);
-
-  sprIdle.style.display = showWalk ? 'none' : 'block';
-  sprWalk.style.display = showWalk ? 'block' : 'none';
-
-  // Direccion
-  if (dir > 0) wrap.classList.add('facing-right');
-  else          wrap.classList.remove('facing-right');
-
-  // Talking
+function setState(state) {
+  wrap.classList.remove('walking', 'talking');
+  if (state === 'walk') wrap.classList.add('walking');
   if (state === 'talk') wrap.classList.add('talking');
-  else                   wrap.classList.remove('talking');
 }
 
-// ─── IPC desde main ────────────────────────────────────────────────────────
-ipcRenderer.on('walk-tick', () => {
-  walkFrame++;
-  updateSprite();
-});
+function setDir(dir) {
+  // dir: -1 = left (default), +1 = right (mirrored)
+  wrap.classList.toggle('facing-right', dir > 0);
+}
 
-ipcRenderer.on('set-dir', (_, newDir) => {
-  dir = newDir;
-  updateSprite();
-});
-
-ipcRenderer.on('set-state', (_, newState) => {
-  state = newState;
-  walkFrame = 0;
-  updateSprite();
-});
-
-// ─── Burbuja ───────────────────────────────────────────────────────────────
+// ── Speech bubble ─────────────────────────────────────────────────────────────
 let bubbleTimer = null;
 
 function showBubble(text) {
   bubble.textContent = text;
   bubble.classList.add('visible');
+  setState('talk');
 
-  if (bubbleTimer) clearTimeout(bubbleTimer);
-  const ms = 4000 + text.split('\n').length * 1200;
-  bubbleTimer = setTimeout(() => bubble.classList.remove('visible'), ms);
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => {
+    bubble.classList.remove('visible');
+    // Return to idle; main.js will resume walking via pauseWalking timeout
+    setState('idle');
+  }, 5000 + text.split('\n').length * 1200);
 }
 
-ipcRenderer.on('speak', (_, text) => {
-  state = 'talk';
-  updateSprite();
-  showBubble(text);
-});
+// ── IPC from main process ─────────────────────────────────────────────────────
+ipcRenderer.on('set-state', (_, s) => setState(s));
+ipcRenderer.on('set-dir',   (_, d) => setDir(d));
+ipcRenderer.on('speak',     (_, t) => showBubble(t));
 
-// ─── Click → dashboard ─────────────────────────────────────────────────────
+// ── Click → open dashboard ────────────────────────────────────────────────────
 wrap.addEventListener('click', () => ipcRenderer.invoke('open-dash'));
-
-// Estado inicial
-updateSprite();
 </script>
 </body>
 </html>

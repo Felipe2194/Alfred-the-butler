@@ -11,15 +11,17 @@
     "dev": "electron . --dev",
     "link": "npm link"
   },
-  "keywords": ["desktop", "reminder", "electron", "pixel-art", "productivity"],
+  "keywords": [
+    "desktop",
+    "reminder",
+    "electron",
+    "pixel-art",
+    "productivity"
+  ],
   "author": "Felipe Giovanardi",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^41.3.0"
-  },
-  "dependencies": {
-    "electron-store": "^11.0.2",
-    "jimp": "^1.6.1",
-    "node-schedule": "^2.1.1"
+    "electron": "^41.3.0",
+    "jimp": "^1.6.1"
   }
 }

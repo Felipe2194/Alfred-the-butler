@@ -98,6 +98,19 @@ LifeCheck runs entirely on your machine and sends nothing anywhere.
 - **No accounts.** No login, no user database, no analytics.
 - **No telemetry.** The app never phones home.
 
+## tech stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Desktop shell | [Electron](https://www.electronjs.org/) v41 | Cross-platform native window, tray, notifications |
+| UI | Vanilla HTML + CSS + JS | Zero dependencies, zero build step, easy to read and extend |
+| Animations | Pure CSS `@keyframes` | No animation library — runs on the GPU compositor thread, zero JS overhead |
+| Data storage | JSON file via Node.js `fs` | No database — a single human-readable file in `%APPDATA%` |
+| CLI command | Node.js `bin` + `npm link` | `hi alfred` works from any terminal after one setup command |
+| Sprite processing | [Jimp](https://github.com/jimp-dev/jimp) *(dev only)* | One-time background removal from PNG sprites; not included in the runtime |
+
+**Zero runtime dependencies.** Electron is the only install. The app is ~50 MB on disk (mostly Electron's Chromium engine) and uses ~80 MB RAM at idle.
+
 ## inspiration
 
 Inspired by [lil-agents](https://github.com/ryanstephen/lil-agents) — AI companions that walk across your macOS Dock. LifeCheck brings the same desktop companion idea to Windows, focused on keeping your real life organized instead of running AI sessions.

@@ -1,74 +1,109 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, screen, nativeImage } = require('electron');
+/**
+ * LifeCheck — main.js
+ * Electron main process: manages Alfred's window, walk loop,
+ * system tray, reminders, and notifications.
+ *
+ * HOW TO CONTRIBUTE:
+ *  - Add new reminder categories → edit dashboard.html (CAT_EMOJI map + select options)
+ *  - Add new random phrases     → edit the PHRASES array below
+ *  - Change walk behavior       → edit the Walker section
+ *  - Add new IPC handlers       → add ipcMain.handle() calls near the bottom
+ */
+
+'use strict';
+
+const {
+  app, BrowserWindow, Tray, Menu,
+  ipcMain, Notification, screen, nativeImage,
+} = require('electron');
 const path = require('path');
 const fs   = require('fs');
 
-// ─── Single instance lock ──────────────────────────────────────────────────────
+// ─── Single-instance guard ─────────────────────────────────────────────────────
+// Prevents two Alfreds from running at the same time.
+// A second launch focuses the dashboard instead.
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
+// ─── Data persistence ──────────────────────────────────────────────────────────
+// All user data lives in one JSON file inside %APPDATA%/lifecheck/
+// No database, no cloud — fully local and portable.
 const DATA_FILE = path.join(app.getPath('userData'), 'data.json');
 
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ items: [] }, null, 2));
-    return { items: [] };
-  }
-  try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
-  catch { return { items: [] }; }
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(DATA_FILE, JSON.stringify({ items: [], name: '' }, null, 2));
+      return { items: [], name: '' };
+    }
+    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  } catch { return { items: [], name: '' }; }
 }
-function saveData(data) { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2)); }
 
-// ─── State ─────────────────────────────────────────────────────────────────────
-let tray        = null;
-let alfredWin   = null;
-let dashWin     = null;
-let checkInterval  = null;
-let randomTimeout  = null;
-let walkInterval   = null;
-let pauseTimeout   = null;
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
 
-// ─── Walker ────────────────────────────────────────────────────────────────────
-const ALFRED_W  = 120;
-const ALFRED_H  = 220;
-const WALK_TICK = 30;    // ms  (~33 fps)
-const WALK_SPEED = 1.5;  // px/tick
+function getSirName() {
+  try { const d = loadData(); return d.name || 'sir'; }
+  catch { return 'sir'; }
+}
+
+// ─── Window references ─────────────────────────────────────────────────────────
+let tray      = null;
+let alfredWin = null;   // Transparent floating character window
+let dashWin   = null;   // Dashboard popup
+
+// ─── Timers ────────────────────────────────────────────────────────────────────
+let walkInterval  = null;   // Move Alfred across screen
+let pauseTimeout  = null;   // Pause between walk segments
+let checkInterval = null;   // Hourly reminder check
+let randomTimeout = null;   // Random butler quip timer
+
+// ─── Walker config ─────────────────────────────────────────────────────────────
+// To make Alfred faster/slower → change WALK_SPEED (px per tick)
+// To reduce CPU usage further  → increase WALK_TICK (ms between ticks)
+const ALFRED_W   = 120;   // Window width  (px)
+const ALFRED_H   = 220;   // Window height (px) — extra room for speech bubble
+const WALK_SPEED = 1.5;   // Pixels per tick
+const WALK_TICK  = 50;    // 20 fps — smooth enough for pixel art, easy on CPU
 
 let walker = {
-  x: 0, dir: -1,
+  x: 0, y: 0,
+  dir: -1,        // -1 = left, +1 = right
   targetX: 0,
-  moving: false,   // empieza oculto; se activa después de load
-  screenY: 0,
+  moving: false,
   minX: 0, maxX: 0,
 };
 
+/** Pick a random destination, avoiding the last 120px of each edge */
 function randomTarget() {
-  // Zona aleatoria: evita los últimos 150px de cada borde (no llega siempre al extremo)
-  const margin = 150;
-  return walker.minX + margin + Math.floor(Math.random() * (walker.maxX - walker.minX - margin * 2));
+  const margin = 120;
+  const range  = walker.maxX - walker.minX - margin * 2;
+  return walker.minX + margin + Math.floor(Math.random() * range);
 }
 
 // ─── Alfred window ─────────────────────────────────────────────────────────────
 function createAlfredWindow() {
   const { workArea: wa, bounds } = screen.getPrimaryDisplay();
 
-  // Walk range: full screen width, feet sit exactly on top of the taskbar
-  walker.minX    = bounds.x + 8;
-  walker.maxX    = bounds.x + bounds.width - ALFRED_W - 8;
-  // Y: bottom of workArea → Alfred's feet touch the taskbar's top edge
-  walker.screenY = wa.y + wa.height - ALFRED_H;
-  walker.x       = walker.maxX;
+  // Walk across the full screen width; feet sit on the taskbar top edge
+  walker.minX = bounds.x + 8;
+  walker.maxX = bounds.x + bounds.width - ALFRED_W - 8;
+  walker.y    = wa.y + wa.height - ALFRED_H;  // feet at taskbar line
+  walker.x    = walker.maxX;
   walker.targetX = randomTarget();
-  walker.dir     = walker.targetX < walker.x ? -1 : 1;
+  walker.dir  = -1;
 
   alfredWin = new BrowserWindow({
     width: ALFRED_W, height: ALFRED_H,
-    x: Math.round(walker.x), y: walker.screenY,
+    x: Math.round(walker.x), y: walker.y,
     transparent: true,
     frame: false,
-    alwaysOnTop: false,   // ← normal level: apps cover Alfred naturally
-    skipTaskbar: true,
+    alwaysOnTop: false,   // Normal z-level: open apps cover Alfred naturally
+    skipTaskbar: true,    // No taskbar button for Alfred himself
     resizable: false,
     hasShadow: false,
-    show: false,
+    show: false,          // Hidden until HTML is ready (prevents white-flash ghost)
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
 
@@ -77,74 +112,112 @@ function createAlfredWindow() {
   alfredWin.webContents.once('did-finish-load', () => {
     alfredWin.show();
     walker.moving = true;
-    alfredWin.webContents.send('set-dir', walker.dir);
-    alfredWin.webContents.send('set-state', 'walk');
+    sendToAlfred('set-dir', walker.dir);
+    sendToAlfred('set-state', 'walk');
     startWalkLoop();
   });
 }
 
+/** Safe IPC send — no-ops if window is gone */
+function sendToAlfred(channel, data) {
+  if (alfredWin && !alfredWin.isDestroyed())
+    alfredWin.webContents.send(channel, data);
+}
+
 // ─── Walk loop ─────────────────────────────────────────────────────────────────
+// Moves the Electron window position each tick. Sprite animation is handled
+// entirely by CSS in alfred.html — no IPC needed per frame.
 function startWalkLoop() {
   if (walkInterval) clearInterval(walkInterval);
 
   walkInterval = setInterval(() => {
-    if (!alfredWin || alfredWin.isDestroyed()) return;
-    if (!walker.moving) return;
+    if (!alfredWin || alfredWin.isDestroyed() || !walker.moving) return;
 
-    // Avanzar hacia el target
     const diff = walker.targetX - walker.x;
+
     if (Math.abs(diff) <= WALK_SPEED) {
-      // Llegó al destino → pausar
+      // Arrived at destination → idle pause
       walker.x = walker.targetX;
       walker.moving = false;
-      alfredWin.setPosition(Math.round(walker.x), walker.screenY);
-      alfredWin.webContents.send('set-state', 'idle');
+      alfredWin.setPosition(Math.round(walker.x), walker.y);
+      sendToAlfred('set-state', 'idle');
       scheduleNextWalk();
-    } else {
-      walker.dir = diff > 0 ? 1 : -1;
-      walker.x  += WALK_SPEED * walker.dir;
-      alfredWin.setPosition(Math.round(walker.x), walker.screenY);
-      alfredWin.webContents.send('walk-tick');
+      return;
     }
+
+    // Only send direction change when it actually flips (not every tick)
+    const newDir = diff > 0 ? 1 : -1;
+    if (newDir !== walker.dir) {
+      walker.dir = newDir;
+      sendToAlfred('set-dir', walker.dir);
+    }
+
+    walker.x += WALK_SPEED * walker.dir;
+    alfredWin.setPosition(Math.round(walker.x), walker.y);
   }, WALK_TICK);
 }
 
+/** Wait 3–8 s at destination, then pick a new random target */
 function scheduleNextWalk() {
   if (pauseTimeout) clearTimeout(pauseTimeout);
-  // Pausa aleatoria entre 3 y 8 segundos en cada destino
-  const pause = 3000 + Math.random() * 5000;
   pauseTimeout = setTimeout(() => {
     if (!alfredWin || alfredWin.isDestroyed()) return;
     walker.targetX = randomTarget();
     walker.dir     = walker.targetX > walker.x ? 1 : -1;
     walker.moving  = true;
-    alfredWin.webContents.send('set-dir', walker.dir);
-    alfredWin.webContents.send('set-state', 'walk');
-  }, pause);
+    sendToAlfred('set-dir', walker.dir);
+    sendToAlfred('set-state', 'walk');
+  }, 3000 + Math.random() * 5000);
 }
 
-// Pausa externa (al hablar) — retoma después de ms
+/** Pause walking for `ms` milliseconds (called while Alfred is speaking) */
 function pauseWalking(ms) {
   if (pauseTimeout) clearTimeout(pauseTimeout);
   walker.moving = false;
-  alfredWin?.webContents.send('set-state', 'idle');
+  sendToAlfred('set-state', 'idle');
   pauseTimeout = setTimeout(() => {
     if (!alfredWin || alfredWin.isDestroyed()) return;
     walker.targetX = randomTarget();
     walker.dir     = walker.targetX > walker.x ? 1 : -1;
     walker.moving  = true;
-    alfredWin.webContents.send('set-dir', walker.dir);
-    alfredWin.webContents.send('set-state', 'walk');
+    sendToAlfred('set-dir', walker.dir);
+    sendToAlfred('set-state', 'walk');
   }, ms);
 }
 
-// ─── Dashboard ─────────────────────────────────────────────────────────────────
+// ─── Alfred speaking ───────────────────────────────────────────────────────────
+/**
+ * Make Alfred show a speech bubble.
+ * @param {string}  text    - Message text (newlines supported)
+ * @param {boolean} urgent  - If true, Alfred rises above all open windows.
+ *                            Use urgent=true for reminders, false for quips.
+ */
+function speak(text, urgent = false) {
+  if (!alfredWin || alfredWin.isDestroyed()) return;
+  const ms = 5000 + text.split('\n').length * 1200;
+
+  if (urgent) {
+    alfredWin.setAlwaysOnTop(true, 'screen-saver');
+    sendToAlfred('speak', text);
+    pauseWalking(ms);
+    setTimeout(() => {
+      if (alfredWin && !alfredWin.isDestroyed()) alfredWin.setAlwaysOnTop(false);
+    }, ms + 500);
+  } else {
+    // Quiet quip — Alfred speaks only if user happens to be on the desktop
+    sendToAlfred('speak', text);
+    pauseWalking(ms);
+  }
+}
+
+// ─── Dashboard window ──────────────────────────────────────────────────────────
 function createDashWindow() {
   if (dashWin && !dashWin.isDestroyed()) { dashWin.focus(); return; }
-  const wa = screen.getPrimaryDisplay().workArea;
+  const { workArea: wa } = screen.getPrimaryDisplay();
   dashWin = new BrowserWindow({
     width: 480, height: 620,
-    x: wa.x + wa.width - 500, y: wa.y + wa.height - 660,
+    x: wa.x + wa.width - 500,
+    y: wa.y + wa.height - 660,
     frame: false, resizable: false, skipTaskbar: true, alwaysOnTop: true,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
@@ -153,110 +226,48 @@ function createDashWindow() {
   dashWin.on('closed', () => { dashWin = null; });
 }
 
-// ─── Tray ──────────────────────────────────────────────────────────────────────
+// ─── System tray ───────────────────────────────────────────────────────────────
 function createTray() {
   const iconPath = path.join(__dirname, 'assets', 'tray-icon.png');
   const icon = fs.existsSync(iconPath)
     ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
     : nativeImage.createEmpty();
+
   tray = new Tray(icon);
   tray.setToolTip('LifeCheck — Alfred at your service');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Dashboard', click: createDashWindow },
-    { label: 'Show / Hide Alfred', click: () => {
-        alfredWin.isVisible() ? alfredWin.hide() : alfredWin.show();
-    }},
+    { label: 'Open Dashboard',    click: createDashWindow },
+    { label: 'Show / Hide Alfred', click: () =>
+        alfredWin.isVisible() ? alfredWin.hide() : alfredWin.show() },
     { type: 'separator' },
     { label: 'Exit', click: () => app.quit() },
   ]));
   tray.on('click', createDashWindow);
 }
 
-// ─── Speak ─────────────────────────────────────────────────────────────────────
-// urgent = true  → Alfred pops above all windows to deliver the message
-// urgent = false → Alfred speaks only if already visible (desktop quips)
-function speak(text, urgent = false) {
-  if (!alfredWin || alfredWin.isDestroyed()) return;
-  const ms = 5000 + text.split('\n').length * 1200;
-
-  if (urgent) {
-    // Rise above everything
-    alfredWin.setAlwaysOnTop(true, 'screen-saver');
-    alfredWin.webContents.send('speak', text);
-    pauseWalking(ms);
-    // Return to normal level after the bubble fades
-    setTimeout(() => {
-      if (alfredWin && !alfredWin.isDestroyed()) {
-        alfredWin.setAlwaysOnTop(false);
-      }
-    }, ms + 500);
-  } else {
-    // Quiet quip — only shows if user is on the desktop
-    alfredWin.webContents.send('speak', text);
-    pauseWalking(ms);
-  }
-}
-
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+// ─── Reminder check ────────────────────────────────────────────────────────────
 function getDaysUntil(dateStr) {
-  const today = new Date(); today.setHours(0,0,0,0);
-  const t     = new Date(dateStr); t.setHours(0,0,0,0);
-  return Math.ceil((t - today) / 86400000);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const target = new Date(dateStr); target.setHours(0, 0, 0, 0);
+  return Math.ceil((target - today) / 86400000);
 }
 
-// ─── Random phrases ────────────────────────────────────────────────────────────
-const PHRASES = [
-  (n) => `Everything alright, ${n}?`,
-  (n) => `Do remember to stay hydrated, ${n}.`,
-  (n) => `A gentleman is always prepared, ${n}.`,
-  (n) => `Is there anything you need, ${n}?`,
-  (n) => `At your service, as always, ${n}.`,
-  (n) => `I trust today is going splendidly, ${n}.`,
-  (n) => `Might I suggest a review of your schedule, ${n}?`,
-  (n) => `A cup of tea would do you well, ${n}.`,
-  (n) => `Have you reviewed your pending items today, ${n}?`,
-  (n) => `A fine day to stay on top of things, ${n}.`,
-];
-
-function getSirName() {
-  try {
-    const d = loadData();
-    return d.name ? d.name : 'sir';
-  } catch { return 'sir'; }
-}
-
-function scheduleRandom() {
-  const delay = (20 + Math.floor(Math.random() * 25)) * 60 * 1000;
-  randomTimeout = setTimeout(() => {
-    const fn = PHRASES[Math.floor(Math.random() * PHRASES.length)];
-    speak(fn(getSirName()));
-    scheduleRandom();
-  }, delay);
-}
-
-// ─── Startup greeting ──────────────────────────────────────────────────────────
-function greetOnStartup() {
-  const h    = new Date().getHours();
-  const name = getSirName();
-  const greeting = h < 12 ? `Good morning, ${name}.` :
-                   h < 19 ? `Good afternoon, ${name}.` :
-                              `Good evening, ${name}.`;
-  setTimeout(() => speak(greeting, true), 2000); // greeting pops up on launch
-}
-
-// ─── Reminder notifications text ───────────────────────────────────────────────
 function checkReminders() {
   const { items = [] } = loadData();
-  const name  = getSirName();
-  const urgent = items
-    .filter(i => i.date && (() => { const d = getDaysUntil(i.date); return d < 0 || d <= (i.alertDays ?? 7); })())
-    .map(i => ({ ...i, days: getDaysUntil(i.date) }));
+  const name = getSirName();
+
+  const urgent = items.filter(i => {
+    if (!i.date) return false;
+    const d = getDaysUntil(i.date);
+    return d < 0 || d <= (i.alertDays ?? 7);
+  }).map(i => ({ ...i, days: getDaysUntil(i.date) }));
+
   if (!urgent.length) return;
 
   const lines = urgent.map(i =>
-    i.days < 0   ? `• ${i.name}: EXPIRED ${Math.abs(i.days)} day${Math.abs(i.days) !== 1 ? 's' : ''} ago` :
+    i.days < 0   ? `• ${i.name}: EXPIRED ${Math.abs(i.days)}d ago` :
     i.days === 0 ? `• ${i.name}: DUE TODAY` :
-                   `• ${i.name}: due in ${i.days} day${i.days !== 1 ? 's' : ''}`
+                   `• ${i.name}: due in ${i.days}d`
   );
 
   new Notification({
@@ -265,36 +276,70 @@ function checkReminders() {
     icon:  path.join(__dirname, 'assets', 'tray-icon.png'),
   }).show();
 
-  speak(`${name}, a reminder:\n` + lines.join('\n'), true); // urgent → pop above all windows
+  speak(`${name}, a reminder:\n` + lines.join('\n'), true);
 }
 
-// ─── IPC ───────────────────────────────────────────────────────────────────────
+// ─── Random butler phrases ─────────────────────────────────────────────────────
+// Add your own phrases here! Each entry is a function receiving the user's name.
+const PHRASES = [
+  n => `Everything alright, ${n}?`,
+  n => `Do remember to stay hydrated, ${n}.`,
+  n => `A gentleman is always prepared, ${n}.`,
+  n => `Is there anything you need, ${n}?`,
+  n => `At your service, as always, ${n}.`,
+  n => `I trust today is going splendidly, ${n}.`,
+  n => `Might I suggest a review of your schedule, ${n}?`,
+  n => `A cup of tea would do you well, ${n}.`,
+  n => `Have you reviewed your pending items today, ${n}?`,
+  n => `A fine day to stay on top of things, ${n}.`,
+];
+
+function scheduleRandom() {
+  // Fire every 20–45 minutes
+  randomTimeout = setTimeout(() => {
+    speak(PHRASES[Math.floor(Math.random() * PHRASES.length)](getSirName()));
+    scheduleRandom();
+  }, (20 + Math.floor(Math.random() * 25)) * 60 * 1000);
+}
+
+// ─── Startup greeting ──────────────────────────────────────────────────────────
+function greetOnStartup() {
+  const h = new Date().getHours();
+  const name = getSirName();
+  const greeting = h < 12 ? `Good morning, ${name}.` :
+                   h < 19 ? `Good afternoon, ${name}.` :
+                              `Good evening, ${name}.`;
+  setTimeout(() => speak(greeting, true), 2000);
+}
+
+// ─── IPC handlers ──────────────────────────────────────────────────────────────
+// Add new handlers here when adding features to the dashboard.
 ipcMain.handle('get-data',      ()        => loadData());
 ipcMain.handle('save-data',     (_, data) => { saveData(data); return true; });
 ipcMain.handle('open-dash',     ()        => createDashWindow());
 ipcMain.handle('check-now',     ()        => checkReminders());
 ipcMain.handle('get-data-path', ()        => DATA_FILE);
-ipcMain.handle('update-name',   ()        => true); // name is read from file on next speak
+ipcMain.handle('update-name',   ()        => true);
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   createAlfredWindow();
   createTray();
   greetOnStartup();
-  setTimeout(checkReminders, 8000);
-  checkInterval = setInterval(checkReminders, 60 * 60 * 1000);
+  setTimeout(checkReminders, 8000);                        // check 8s after startup
+  checkInterval = setInterval(checkReminders, 3600000);    // then every hour
   scheduleRandom();
 });
 
-app.on('second-instance', () => {
-  // Si el usuario intenta abrir una segunda instancia, enfocar el dashboard
-  createDashWindow();
-});
-
+// Prevent app from quitting when all windows close — it lives in the tray
 app.on('window-all-closed', e => e.preventDefault());
+
+// Second launch → focus dashboard instead of opening a new instance
+app.on('second-instance', createDashWindow);
+
 app.on('before-quit', () => {
-  clearInterval(checkInterval);
   clearInterval(walkInterval);
-  clearTimeout(randomTimeout);
+  clearInterval(checkInterval);
   clearTimeout(pauseTimeout);
+  clearTimeout(randomTimeout);
 });
