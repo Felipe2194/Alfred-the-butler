@@ -1,144 +1,111 @@
 # LifeCheck
 
-**Alfred, your pixel-art butler, lives on your desktop and makes sure you never forget anything important.**
-
-Driver's license expiring? Gym membership running out? Car inspection due? Birthday coming up? Alfred will let you know — before it's too late.
-
----
-
 ![Alfred walking on your desktop](assets/alfred.png)
 
----
+A pixel-art butler named Alfred who lives on your Windows desktop and makes sure you never forget anything important.
 
-## What is LifeCheck?
+Driver's license expiring? Car inspection due? Gym membership running out? Birthday coming up? Alfred walks across your screen, greets you by name, and tells you before it's too late.
 
-LifeCheck is a lightweight Windows desktop companion that sits at the bottom of your screen as a walking pixel-art butler named Alfred. He wanders your desktop, greets you by name, and reminds you of upcoming deadlines through speech bubbles and Windows notifications.
+## what it does
 
-No cloud. No account. No subscriptions. Everything is stored locally on your machine.
+- Alfred walks back and forth at the bottom of your screen — always visible, never intrusive
+- Speech bubbles appear when he has something to tell you
+- Windows notifications for urgent and expiring items
+- Greets you by name at startup (morning, afternoon, or evening)
+- Drops random butler quips every 20–45 minutes
+- Rises above all open windows when something needs attention
+- Lives in the system tray when you don't need the dashboard
+- All data stored locally — no cloud, no account, no telemetry
 
----
+## what Alfred tracks
 
-## Features
+| | category | examples |
+|---|---|---|
+| 📄 | Document | Passport, national ID, driver's license |
+| 🚗 | Vehicle | Car inspection, oil change, registration |
+| 💊 | Health / Gym | Gym membership, medical appointments |
+| 🎂 | Birthday | Family, friends |
+| 💳 | Subscription / Bill | Netflix, Spotify, insurance |
+| 📌 | Other | Anything you don't want to forget |
 
-- **Pixel-art Alfred** walks across the bottom of your screen at all times
-- **Speech bubbles** appear when Alfred has something to tell you
-- **Windows notifications** for urgent and expiring items
-- **Personalized greetings** — Alfred addresses you by name, morning, afternoon, and evening
-- **Random butler quips** — Alfred checks in on you every 20–45 minutes
-- **Always on top** — when something is urgent, Alfred rises above all open windows
-- **System tray** — lives quietly in the taskbar, never cluttering your screen
-- **Dashboard** — clean dark UI to manage all your reminders
-- **Fully local** — all data stored in a JSON file on your machine, zero telemetry
+For each reminder you set a due date, how many days in advance Alfred warns you, and an optional note.
 
----
+## requirements
 
-## What Alfred tracks
-
-| Category | Examples |
-|---|---|
-| 📄 **Documents** | Passport, National ID, driver's license |
-| 🚗 **Vehicle** | Car inspection (MOT/ITV), oil change, registration |
-| 💊 **Health / Gym** | Gym membership, medical appointments |
-| 🎂 **Birthdays** | Family, friends, anyone important |
-| 💳 **Subscriptions / Bills** | Netflix, Spotify, insurance, rent |
-| 📌 **Other** | Anything else you don't want to forget |
-
-For each item you set:
-- A **due date**
-- How many **days in advance** Alfred warns you (1, 3, 7, 14, 30, or 60 days)
-- An optional **note**
-
----
-
-## Installation
-
-### Requirements
 - Windows 10 / 11
 - [Node.js](https://nodejs.org) v18 or later
 
-### Steps
+## installation
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/felipegiovanardi/LifeCheck.git
 cd LifeCheck
-
-# 2. Install dependencies
 npm install
-
-# 3. Start
-npm start
+npm link
 ```
 
-Alfred will appear in the bottom-right corner and start walking. Click on him or his tray icon to open the dashboard.
+Then from any terminal:
 
----
+```
+hi alfred
+```
 
-## Usage
+Alfred appears in the bottom-right corner and starts walking.
 
-### Adding a reminder
-1. Click Alfred or the tray icon
-2. Go to the **+ Add** tab
-3. Fill in the name, category, due date, and advance notice
-4. Hit **Save**
+## usage
 
-### Editing or deleting
-Click any item card to edit it. A **Delete** button appears at the bottom of the edit form.
+**Adding a reminder** — click Alfred or the tray icon → **+ Add** tab → fill in the details → Save
 
-### Personalizing Alfred
-Go to **Settings** tab → enter your name → Save. Alfred will greet you by name from then on.
+**Editing or deleting** — click any item card in the dashboard to edit it
 
-### Closing the app
-Right-click the tray icon → **Exit**. Do not close from Task Manager — Alfred won't say goodbye properly.
+**Personalizing** — go to **Settings** tab → enter your name → Alfred will use it from then on
 
----
+**Closing** — right-click the tray icon → Exit
 
-## Project structure
+## how the command works
+
+`npm link` registers a global `hi` command on your system. Running `hi alfred` launches the Electron app from anywhere in your terminal with a small ASCII splash screen. If Alfred is already running, a second instance won't open.
+
+To unregister the command at any time:
+
+```bash
+npm unlink -g lifecheck
+```
+
+## project structure
 
 ```
 LifeCheck/
-├── main.js                 # Electron main process — windows, tray, walker, notifications
+├── main.js                 # main process — walker, tray, notifications
+├── bin/hi.js               # CLI entry point for 'hi alfred'
 ├── renderer/
-│   ├── alfred.html         # Alfred floating window — sprites + bubble
-│   └── dashboard.html      # Reminder dashboard — 4 tabs
+│   ├── alfred.html         # floating Alfred window — sprites + bubble
+│   └── dashboard.html      # dashboard — Today / All / Add / Settings
 ├── assets/
-│   ├── alfred.png          # Idle sprite (pixel art)
-│   ├── alfred-walk.png     # Walk sprite (pixel art)
-│   └── tray-icon.png       # System tray icon
-├── process-sprites.js      # Utility: remove backgrounds from sprites
-└── generate-icon.js        # Utility: generate tray icon PNG
+│   ├── alfred.png          # idle sprite
+│   ├── alfred-walk.png     # walk sprite
+│   └── tray-icon.png       # system tray icon
+└── process-sprites.js      # utility: strip backgrounds from sprites
 ```
 
-Data is stored at:
-```
-%APPDATA%\lifecheck\data.json
-```
+Data is saved at `%APPDATA%\lifecheck\data.json`.
 
----
+## privacy
 
-## Inspiration
+LifeCheck runs entirely on your machine and sends nothing anywhere.
 
-Inspired by [lil-agents](https://github.com/ryanstephen/lil-agents) — a macOS app where AI agent characters walk across your Dock. LifeCheck brings that same desktop companion energy to Windows, focused on keeping your real life organized instead of running AI sessions.
+- **Your data stays local.** Reminders are stored in a JSON file on your computer. Nothing is uploaded, synced, or shared.
+- **No accounts.** No login, no user database, no analytics.
+- **No telemetry.** The app never phones home.
 
----
+## inspiration
 
-## Contributing
+Inspired by [lil-agents](https://github.com/ryanstephen/lil-agents) — AI companions that walk across your macOS Dock. LifeCheck brings the same desktop companion idea to Windows, focused on keeping your real life organized instead of running AI sessions.
 
-Pull requests are welcome. If you have ideas for new categories, reminder types, or Alfred animations — open an issue or send a PR.
+## license
 
-Some ideas for the future:
-- Yearly recurrence for birthdays and subscriptions
-- Alfred walking sound effects
-- Multiple reminder types (one-time vs. recurring)
-- macOS support via Electron
-
----
-
-## License
-
-MIT — do whatever you want with it, just don't make Alfred work overtime.
+MIT — do whatever you want with it.
 
 ---
 
 *"I have been, and always shall be, at your service."*
-*— Alfred*
