@@ -48,11 +48,14 @@ function randomTarget() {
 
 // ─── Alfred window ─────────────────────────────────────────────────────────────
 function createAlfredWindow() {
-  const wa = screen.getPrimaryDisplay().workArea;
-  walker.minX    = wa.x + 8;
-  walker.maxX    = wa.x + wa.width - ALFRED_W - 8;
+  const { workArea: wa, bounds } = screen.getPrimaryDisplay();
+
+  // Walk range: full screen width, feet sit exactly on top of the taskbar
+  walker.minX    = bounds.x + 8;
+  walker.maxX    = bounds.x + bounds.width - ALFRED_W - 8;
+  // Y: bottom of workArea → Alfred's feet touch the taskbar's top edge
   walker.screenY = wa.y + wa.height - ALFRED_H;
-  walker.x       = walker.maxX;          // posicion inicial (oculta hasta load)
+  walker.x       = walker.maxX;
   walker.targetX = randomTarget();
   walker.dir     = walker.targetX < walker.x ? -1 : 1;
 
@@ -61,16 +64,15 @@ function createAlfredWindow() {
     x: Math.round(walker.x), y: walker.screenY,
     transparent: true,
     frame: false,
-    alwaysOnTop: true,
+    alwaysOnTop: false,   // ← normal level: apps cover Alfred naturally
     skipTaskbar: true,
     resizable: false,
     hasShadow: false,
-    show: false,          // ← oculto hasta que cargue; evita el Alfred fantasma blanco
+    show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
 
   alfredWin.loadFile(path.join(__dirname, 'renderer', 'alfred.html'));
-  alfredWin.setAlwaysOnTop(true, 'screen-saver');
 
   alfredWin.webContents.once('did-finish-load', () => {
     alfredWin.show();
@@ -158,25 +160,41 @@ function createTray() {
     ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
     : nativeImage.createEmpty();
   tray = new Tray(icon);
-  tray.setToolTip('LifeCheck — Alfred al servicio');
+  tray.setToolTip('LifeCheck — Alfred at your service');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Abrir Panel', click: createDashWindow },
-    { label: 'Mostrar/Ocultar Alfred', click: () => {
+    { label: 'Open Dashboard', click: createDashWindow },
+    { label: 'Show / Hide Alfred', click: () => {
         alfredWin.isVisible() ? alfredWin.hide() : alfredWin.show();
     }},
     { type: 'separator' },
-    { label: 'Salir', click: () => app.quit() },
+    { label: 'Exit', click: () => app.quit() },
   ]));
   tray.on('click', createDashWindow);
 }
 
 // ─── Speak ─────────────────────────────────────────────────────────────────────
-function speak(text) {
+// urgent = true  → Alfred pops above all windows to deliver the message
+// urgent = false → Alfred speaks only if already visible (desktop quips)
+function speak(text, urgent = false) {
   if (!alfredWin || alfredWin.isDestroyed()) return;
-  alfredWin.setAlwaysOnTop(true, 'screen-saver');
-  alfredWin.webContents.send('speak', text);
   const ms = 5000 + text.split('\n').length * 1200;
-  pauseWalking(ms);
+
+  if (urgent) {
+    // Rise above everything
+    alfredWin.setAlwaysOnTop(true, 'screen-saver');
+    alfredWin.webContents.send('speak', text);
+    pauseWalking(ms);
+    // Return to normal level after the bubble fades
+    setTimeout(() => {
+      if (alfredWin && !alfredWin.isDestroyed()) {
+        alfredWin.setAlwaysOnTop(false);
+      }
+    }, ms + 500);
+  } else {
+    // Quiet quip — only shows if user is on the desktop
+    alfredWin.webContents.send('speak', text);
+    pauseWalking(ms);
+  }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -223,7 +241,7 @@ function greetOnStartup() {
   const greeting = h < 12 ? `Good morning, ${name}.` :
                    h < 19 ? `Good afternoon, ${name}.` :
                               `Good evening, ${name}.`;
-  setTimeout(() => speak(greeting), 2000);
+  setTimeout(() => speak(greeting, true), 2000); // greeting pops up on launch
 }
 
 // ─── Reminder notifications text ───────────────────────────────────────────────
@@ -247,7 +265,7 @@ function checkReminders() {
     icon:  path.join(__dirname, 'assets', 'tray-icon.png'),
   }).show();
 
-  speak(`${name}, a reminder:\n` + lines.join('\n'));
+  speak(`${name}, a reminder:\n` + lines.join('\n'), true); // urgent → pop above all windows
 }
 
 // ─── IPC ───────────────────────────────────────────────────────────────────────
