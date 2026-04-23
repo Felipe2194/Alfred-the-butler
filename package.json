@@ -1,14 +1,18 @@
 {
   "name": "lifecheck",
   "version": "1.0.0",
-  "description": "Alfred te recuerda todo lo que olvidas",
+  "description": "Alfred, a pixel-art butler that lives on your desktop and reminds you of everything important.",
   "main": "main.js",
+  "bin": {
+    "hi": "./bin/hi.js"
+  },
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "link": "npm link"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["desktop", "reminder", "electron", "pixel-art", "productivity"],
+  "author": "Felipe Giovanardi",
   "license": "ISC",
   "devDependencies": {
     "electron": "^41.3.0"
