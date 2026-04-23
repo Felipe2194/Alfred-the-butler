@@ -1,4 +1,4 @@
-# Alfred you Butler
+# Alfred your Butler
 
 ![Alfred walking on your desktop](assets/alfred.png)
 
