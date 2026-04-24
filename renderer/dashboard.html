@@ -371,6 +371,20 @@
     </div>
 
     <div class="form-group">
+      <label>Repeat</label>
+      <select id="f-recur">
+        <option value="none">Does not repeat</option>
+        <option value="years:1">Every year</option>
+        <option value="months:6">Every 6 months</option>
+        <option value="months:3">Every 3 months</option>
+        <option value="months:2">Every 2 months</option>
+        <option value="months:1">Every month</option>
+        <option value="days:14">Every 2 weeks</option>
+        <option value="days:7">Every week</option>
+      </select>
+    </div>
+
+    <div class="form-group">
       <label>Note (optional)</label>
       <input id="f-note" type="text" placeholder="e.g. Book appointment first">
     </div>
@@ -398,6 +412,27 @@
     </div>
     <div style="margin-top:16px">
       <button class="btn btn-primary" id="settings-save-btn">Save Settings</button>
+    </div>
+
+    <!-- ── ntfy.sh phone notifications ──────────────────────────────────── -->
+    <div class="section-title" style="margin-top:20px">📱 Phone Notifications</div>
+    <div style="font-size:7px; color:var(--muted); line-height:2.2; margin-bottom:14px; border: 2px dashed #1e1e30; padding:10px;">
+      Install the <span style="color:var(--accent2)">ntfy</span> app on your phone,<br>
+      tap <span style="color:var(--text)">+ New subscription</span> and enter<br>
+      the topic name you choose below.<br>
+      Alfred will push reminders instantly.
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">ntfy topic</span>
+      <input id="s-ntfy" type="text" placeholder="e.g. AlfredButler" style="width:160px">
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">ntfy token</span>
+      <input id="s-ntfy-token" type="password" placeholder="tk_••••••••••" style="width:160px">
+    </div>
+    <div style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-secondary" id="ntfy-test-btn">Send Test</button>
+      <span id="ntfy-status" style="font-size:7px; color:var(--muted);"></span>
     </div>
   </div>
 
@@ -446,6 +481,45 @@ function cardClass(days, alertDays) {
   return 'ok';
 }
 
+// ── Recurring helpers ─────────────────────────────────────────────────────────
+/**
+ * For a recurring item whose stored date is in the past, calculate the next
+ * future occurrence on-the-fly (without modifying data).
+ * main.js also does this and saves, but the renderer computes it locally so
+ * the UI is always correct even before the next hourly check.
+ */
+function getEffectiveDate(item) {
+  if (!item.recur || item.recur === 'none') return item.date;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let d = new Date(item.date + 'T00:00:00');
+  if (d >= today) return item.date;
+  const n = item.recurEvery || 1;
+  while (d < today) {
+    if (item.recur === 'years')  d.setFullYear(d.getFullYear() + n);
+    if (item.recur === 'months') d.setMonth(d.getMonth() + n);
+    if (item.recur === 'days')   d.setDate(d.getDate() + n);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/** daysUntil using the effective (possibly advanced) date for recurring items */
+function daysUntilItem(item) {
+  return daysUntil(getEffectiveDate(item));
+}
+
+/** Short human-readable recurrence label, e.g. "yearly", "every 2 mo" */
+function recurLabel(item) {
+  if (!item.recur || item.recur === 'none') return '';
+  if (item.recur === 'years')  return 'yearly';
+  if (item.recur === 'months') return item.recurEvery === 1 ? 'monthly' : `every ${item.recurEvery} mo`;
+  if (item.recur === 'days') {
+    if (item.recurEvery === 7)  return 'weekly';
+    if (item.recurEvery === 14) return 'every 2 wk';
+    return `every ${item.recurEvery}d`;
+  }
+  return '';
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let data   = { items: [], name: '' };
 let editId = null;   // null = new item, string = editing existing item
@@ -462,10 +536,10 @@ async function load() {
 function renderDash() {
   const items   = (data.items || []).filter(i => i.date);
   const name    = data.name || 'sir';
-  const expired = items.filter(i => daysUntil(i.date) < 0);
-  const urgent  = items.filter(i => { const d = daysUntil(i.date); return d >= 0 && d <= 3; });
-  const warning = items.filter(i => { const d = daysUntil(i.date); return d > 3 && d <= (i.alertDays ?? 7); });
-  const ok      = items.filter(i => daysUntil(i.date) > (i.alertDays ?? 7));
+  const expired = items.filter(i => daysUntilItem(i) < 0);
+  const urgent  = items.filter(i => { const d = daysUntilItem(i); return d >= 0 && d <= 3; });
+  const warning = items.filter(i => { const d = daysUntilItem(i); return d > 3 && d <= (i.alertDays ?? 7); });
+  const ok      = items.filter(i => daysUntilItem(i) > (i.alertDays ?? 7));
 
   // Alfred's greeting line
   document.getElementById('alfred-speech').textContent =
@@ -492,14 +566,21 @@ function section(id, title, items) {
 
 /** Returns the HTML string for one reminder card */
 function itemCard(item) {
-  const days = daysUntil(item.date);
+  const effDate = getEffectiveDate(item);
+  const days    = daysUntil(effDate);
   const [label, bc] = badge(days, item.alertDays ?? 7);
+  const rLabel  = recurLabel(item);
+  const sub = [
+    formatDate(effDate),
+    item.note  ? item.note            : '',
+    rLabel     ? '🔄 ' + rLabel       : '',
+  ].filter(Boolean).join(' · ');
   return `<div class="item-card ${cardClass(days, item.alertDays ?? 7)}"
                onclick="openEdit('${item.id}')">
     <span class="item-emoji">${CAT_EMOJI[item.category] || '📌'}</span>
     <div class="item-info">
       <div class="item-name">${item.name}</div>
-      <div class="item-sub">${formatDate(item.date)}${item.note ? ' — ' + item.note : ''}</div>
+      <div class="item-sub">${sub}</div>
     </div>
     <span class="badge ${bc}">${label}</span>
   </div>`;
@@ -536,6 +617,7 @@ function resetForm() {
   document.getElementById('f-cat').value   = 'document';
   document.getElementById('f-date').value  = '';
   document.getElementById('f-alert').value = '7';
+  document.getElementById('f-recur').value = 'none';
   document.getElementById('f-note').value  = '';
   document.getElementById('form-title').textContent = 'New Reminder';
   document.getElementById('delete-btn')?.remove();
@@ -551,6 +633,8 @@ function openEdit(id) {
   document.getElementById('f-cat').value   = item.category;
   document.getElementById('f-date').value  = item.date;
   document.getElementById('f-alert').value = String(item.alertDays ?? 7);
+  document.getElementById('f-recur').value = (item.recur && item.recur !== 'none')
+    ? `${item.recur}:${item.recurEvery || 1}` : 'none';
   document.getElementById('f-note').value  = item.note || '';
 
   if (!document.getElementById('delete-btn')) {
@@ -569,13 +653,18 @@ document.getElementById('save-btn').addEventListener('click', async () => {
   document.getElementById('f-date').style.borderColor = date ? '#000' : 'var(--red)';
   if (!name || !date) return;
 
+  const recurRaw = document.getElementById('f-recur').value;
+  const [recurType, recurN] = recurRaw !== 'none' ? recurRaw.split(':') : ['none', '1'];
+
   const item = {
-    id:        editId || Date.now().toString(),
+    id:         editId || Date.now().toString(),
     name,
-    category:  document.getElementById('f-cat').value,
+    category:   document.getElementById('f-cat').value,
     date,
-    alertDays: parseInt(document.getElementById('f-alert').value),
-    note:      document.getElementById('f-note').value.trim(),
+    alertDays:  parseInt(document.getElementById('f-alert').value),
+    note:       document.getElementById('f-note').value.trim(),
+    recur:      recurType,
+    recurEvery: parseInt(recurN, 10) || 1,
   };
 
   if (editId) {
@@ -607,17 +696,43 @@ document.getElementById('cancel-btn').addEventListener('click', () => {
 // ── Settings tab ──────────────────────────────────────────────────────────────
 function loadSettings() {
   document.getElementById('s-name').value = data.name || '';
+  document.getElementById('s-ntfy').value       = data.ntfyTopic || '';
+  document.getElementById('s-ntfy-token').value = data.ntfyToken || '';
   ipcRenderer.invoke('get-data-path').then(p =>
     document.getElementById('s-datapath').textContent = p);
 }
 
 document.getElementById('settings-save-btn').addEventListener('click', async () => {
-  data.name = document.getElementById('s-name').value.trim();
+  data.name       = document.getElementById('s-name').value.trim();
+  data.ntfyTopic  = document.getElementById('s-ntfy').value.trim();
+  data.ntfyToken  = document.getElementById('s-ntfy-token').value.trim();
   await ipcRenderer.invoke('save-data', data);
   renderDash();
   const btn = document.getElementById('settings-save-btn');
   btn.textContent = 'SAVED ✓';
   setTimeout(() => btn.textContent = 'Save Settings', 1500);
+});
+
+// ── ntfy test button ───────────────────────────────────────────────────────────
+document.getElementById('ntfy-test-btn').addEventListener('click', async () => {
+  const topic  = document.getElementById('s-ntfy').value.trim();
+  const status = document.getElementById('ntfy-status');
+
+  if (!topic) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Enter a topic first.';
+    setTimeout(() => status.textContent = '', 2500);
+    return;
+  }
+
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Sending...';
+
+  const token = document.getElementById('s-ntfy-token').value.trim();
+  const ok = await ipcRenderer.invoke('ntfy-test', { topic, token });
+  status.style.color = ok ? 'var(--green)' : 'var(--red)';
+  status.textContent = ok ? 'Sent! Check your phone ✓' : 'Failed — check your internet or topic name ✗';
+  setTimeout(() => status.textContent = '', 4000);
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────

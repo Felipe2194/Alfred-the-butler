@@ -16,8 +16,9 @@ const {
   app, BrowserWindow, Tray, Menu,
   ipcMain, Notification, screen, nativeImage,
 } = require('electron');
-const path = require('path');
-const fs   = require('fs');
+const path  = require('path');
+const fs    = require('fs');
+const https = require('https');
 
 // ─── Single-instance guard ─────────────────────────────────────────────────────
 // Prevents two Alfreds from running at the same time.
@@ -86,26 +87,38 @@ function randomTarget() {
 function createAlfredWindow() {
   const { workArea: wa, bounds } = screen.getPrimaryDisplay();
 
-  // Walk across the full screen width; feet sit on the taskbar top edge
+  // Walk across the full screen width; feet sit on the taskbar/dock top edge.
+  // Math.round prevents sub-pixel drift that can push Alfred 1px into the taskbar.
   walker.minX = bounds.x + 8;
   walker.maxX = bounds.x + bounds.width - ALFRED_W - 8;
-  walker.y    = wa.y + wa.height - ALFRED_H;  // feet at taskbar line
+  walker.y    = Math.round(wa.y + wa.height - ALFRED_H);
   walker.x    = walker.maxX;
   walker.targetX = randomTarget();
   walker.dir  = -1;
 
+  // On macOS the Dock has a higher z-order than normal windows, so Alfred would
+  // disappear behind it. Using alwaysOnTop:true with level 'floating' keeps him
+  // visible above the Dock while still letting modal dialogs cover him.
+  // On Windows the taskbar is always-on-top regardless of our setting, so we
+  // leave Alfred at the normal z-level so regular app windows cover him naturally.
+  const isMac = process.platform === 'darwin';
+
   alfredWin = new BrowserWindow({
     width: ALFRED_W, height: ALFRED_H,
-    x: Math.round(walker.x), y: walker.y,
+    x: Math.round(walker.x), y: Math.round(walker.y),
     transparent: true,
     frame: false,
-    alwaysOnTop: false,   // Normal z-level: open apps cover Alfred naturally
-    skipTaskbar: true,    // No taskbar button for Alfred himself
+    alwaysOnTop: isMac,   // macOS: float above Dock; Windows: normal z-level
+    skipTaskbar: true,    // No taskbar/Dock button for Alfred
     resizable: false,
     hasShadow: false,
     show: false,          // Hidden until HTML is ready (prevents white-flash ghost)
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
+
+  // On macOS keep Alfred at the 'floating' level — above normal windows and the
+  // Dock, but below full-screen apps and screen savers.
+  if (isMac) alfredWin.setAlwaysOnTop(true, 'floating');
 
   alfredWin.loadFile(path.join(__dirname, 'renderer', 'alfred.html'));
 
@@ -139,7 +152,7 @@ function startWalkLoop() {
       // Arrived at destination → idle pause
       walker.x = walker.targetX;
       walker.moving = false;
-      alfredWin.setPosition(Math.round(walker.x), walker.y);
+      alfredWin.setPosition(Math.round(walker.x), Math.round(walker.y));
       sendToAlfred('set-state', 'idle');
       scheduleNextWalk();
       return;
@@ -153,7 +166,7 @@ function startWalkLoop() {
     }
 
     walker.x += WALK_SPEED * walker.dir;
-    alfredWin.setPosition(Math.round(walker.x), walker.y);
+    alfredWin.setPosition(Math.round(walker.x), Math.round(walker.y));
   }, WALK_TICK);
 }
 
@@ -245,6 +258,58 @@ function createTray() {
   tray.on('click', createDashWindow);
 }
 
+// ─── ntfy.sh phone notifications ──────────────────────────────────────────────
+// No dependencies — uses Node's built-in https module.
+// ntfy.sh is a free push-notification service; the user installs the ntfy app
+// on their phone and subscribes to a self-chosen topic name.
+//
+// API: POST https://ntfy.sh/{topic}
+//   Headers: Title, Priority (min/low/default/high/max), Tags (emoji shortcuts)
+//   Body:    plain-text message
+//
+// topicOverride lets the Settings "Send Test" button test before saving.
+function sendPhoneNotification(title, body, priority = 'default', topicOverride = null, tokenOverride = null) {
+  const saved = loadData();
+  const topic = (topicOverride || (saved.ntfyTopic || '')).trim();
+  if (!topic) return Promise.resolve(false);
+
+  const token = (tokenOverride !== null ? tokenOverride : (saved.ntfyToken || '')).trim();
+
+  return new Promise(resolve => {
+    const payload = Buffer.from(body, 'utf8');
+    // HTTP headers are ASCII-only — strip any non-ASCII chars from title
+    const safeTitle = title.replace(/[^\x00-\x7F]/g, '').trim() || 'Alfred';
+
+    const headers = {
+      'Title':          safeTitle,
+      'Priority':       priority,
+      'Tags':           priority === 'high' ? 'warning,bell' : 'bell',
+      'Content-Type':   'text/plain; charset=utf-8',
+      'Content-Length': payload.length,
+    };
+
+    // Bearer token — keeps your topic private so only you receive notifications
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const req = https.request(
+      {
+        hostname: 'ntfy.sh',
+        port:     443,
+        path:     `/${encodeURIComponent(topic)}`,
+        method:   'POST',
+        headers,
+      },
+      res => resolve(res.statusCode >= 200 && res.statusCode < 300)
+    );
+    req.on('error', err => {
+      console.warn('[ntfy] notification failed:', err.message);
+      resolve(false);
+    });
+    req.write(payload);
+    req.end();
+  });
+}
+
 // ─── Reminder check ────────────────────────────────────────────────────────────
 function getDaysUntil(dateStr) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -252,9 +317,35 @@ function getDaysUntil(dateStr) {
   return Math.ceil((target - today) / 86400000);
 }
 
+// ─── Recurring reminder helper ─────────────────────────────────────────────────
+// If a recurring item's date is in the past, advance it to the next future
+// occurrence. Mutates item.date in place; returns true if the date changed.
+// Called in checkReminders() so the saved data always holds the next due date.
+function advanceRecurring(item) {
+  if (!item.recur || item.recur === 'none') return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let d = new Date(item.date + 'T00:00:00');
+  if (d >= today) return false;  // not yet past — nothing to do
+  const n = item.recurEvery || 1;
+  while (d < today) {
+    if (item.recur === 'years')  d.setFullYear(d.getFullYear() + n);
+    if (item.recur === 'months') d.setMonth(d.getMonth() + n);
+    if (item.recur === 'days')   d.setDate(d.getDate() + n);
+  }
+  item.date = d.toISOString().slice(0, 10);
+  return true;
+}
+
 function checkReminders() {
-  const { items = [] } = loadData();
+  // Load the full data object so we can save back advanced recurring dates
+  const data = loadData();
   const name = getSirName();
+
+  // Auto-advance any past-due recurring items and persist the changes
+  const changed = (data.items || []).reduce((acc, i) => advanceRecurring(i) || acc, false);
+  if (changed) saveData(data);
+
+  const items = data.items || [];
 
   const urgent = items.filter(i => {
     if (!i.date) return false;
@@ -277,6 +368,15 @@ function checkReminders() {
   }).show();
 
   speak(`${name}, a reminder:\n` + lines.join('\n'), true);
+
+  // Phone notification — only fires if the user has configured an ntfy topic.
+  // Priority is 'high' if any item is already expired or due today.
+  const hasUrgent = urgent.some(i => i.days <= 0);
+  sendPhoneNotification(
+    'Alfred - Reminder',
+    lines.join('\n'),
+    hasUrgent ? 'high' : 'default'
+  );
 }
 
 // ─── Random butler phrases ─────────────────────────────────────────────────────
@@ -320,9 +420,16 @@ ipcMain.handle('open-dash',     ()        => createDashWindow());
 ipcMain.handle('check-now',     ()        => checkReminders());
 ipcMain.handle('get-data-path', ()        => DATA_FILE);
 ipcMain.handle('update-name',   ()        => true);
+// Test button in Settings — sends a test notification to the given topic
+// without requiring the user to save first.
+ipcMain.handle('ntfy-test', (_, { topic, token }) =>
+  sendPhoneNotification('Alfred - Test', 'Test successful! Alfred is ready to serve.', 'default', topic, token));
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // Hide from macOS Dock — Alfred lives in the menu-bar tray, not the Dock.
+  if (process.platform === 'darwin') app.dock?.hide();
+
   createAlfredWindow();
   createTray();
   greetOnStartup();

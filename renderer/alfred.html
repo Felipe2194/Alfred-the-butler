@@ -165,6 +165,112 @@ const { ipcRenderer } = require('electron');
 const wrap   = document.getElementById('alfred-wrap');
 const bubble = document.getElementById('bubble');
 
+// ── Sprite fringe cleanup ─────────────────────────────────────────────────────
+// The background-removal scripts leave anti-aliased "fringe" pixels at the
+// character's edges — near-white remnants of the original background that appear
+// as white lines when Alfred walks over dark surfaces.
+//
+// This Canvas pass runs once per sprite at load-time:
+//   1. Replicate the flood-fill with a wider tolerance (±60 vs ±25)
+//      starting from the four edges of the bitmap.
+//   2. Up to 3 iterative edge-erosion passes to catch multi-pixel fringe bands.
+// Only pixels that are BOTH near the background colour AND adjacent to a
+// transparent pixel are removed — interior character pixels are untouched.
+function cleanFringe(imgEl) {
+  return new Promise(resolve => {
+    const c   = document.createElement('canvas');
+    c.width   = imgEl.naturalWidth;
+    c.height  = imgEl.naturalHeight;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(imgEl, 0, 0);
+    const id  = ctx.getImageData(0, 0, c.width, c.height);
+    const px  = id.data;
+    const W   = c.width, H = c.height;
+
+    // Sample the background colour from the four corners and average them.
+    // The sprite edges will have remnants of this colour.
+    function corner(x, y) {
+      const i = (y * W + x) * 4;
+      return [px[i], px[i+1], px[i+2], px[i+3]];
+    }
+    const corners = [corner(0,0), corner(W-1,0), corner(0,H-1), corner(W-1,H-1)]
+      .filter(([,,,a]) => a > 0);  // skip already-transparent corners
+    const bgR = corners.length ? corners.reduce((s,[r])=>s+r,0)/corners.length : 236;
+    const bgG = corners.length ? corners.reduce((s,[,g])=>s+g,0)/corners.length : 236;
+    const bgB = corners.length ? corners.reduce((s,[,,b])=>s+b,0)/corners.length : 236;
+    const TOL = 60;  // wider than the original ±25 — catches partial anti-alias
+
+    function nearBg(i) {
+      return Math.abs(px[i]  -bgR)<TOL &&
+             Math.abs(px[i+1]-bgG)<TOL &&
+             Math.abs(px[i+2]-bgB)<TOL &&
+             px[i+3] > 0;
+    }
+
+    // ── Step 1: flood-fill from all four edges (same as process-sprites.js) ──
+    const visited = new Uint8Array(W * H);
+    const queue   = [];
+
+    function enq(x, y) {
+      if (x<0||x>=W||y<0||y>=H) return;
+      const pos = y*W+x;
+      if (visited[pos]) return;
+      if (!nearBg(pos*4)) return;
+      visited[pos] = 1;
+      queue.push(x, y);
+    }
+    for (let x=0;x<W;x++) { enq(x,0); enq(x,H-1); }
+    for (let y=0;y<H;y++) { enq(0,y); enq(W-1,y); }
+
+    let head = 0;
+    while (head < queue.length) {
+      const x = queue[head++], y = queue[head++];
+      px[(y*W+x)*4+3] = 0;
+      enq(x+1,y); enq(x-1,y); enq(x,y+1); enq(x,y-1);
+      enq(x+1,y+1); enq(x-1,y-1); enq(x+1,y-1); enq(x-1,y+1);
+    }
+
+    // ── Step 2: iterative edge erosion — catches fringe the flood-fill missed ──
+    for (let pass = 0; pass < 3; pass++) {
+      let changed = false;
+      for (let y=0;y<H;y++) {
+        for (let x=0;x<W;x++) {
+          const i = (y*W+x)*4;
+          if (px[i+3]===0) continue;
+          if (!nearBg(i)) continue;
+          // Only remove if adjacent to a transparent pixel (true edge fringe)
+          let edge = false;
+          for (let dy=-1; dy<=1&&!edge; dy++)
+            for (let dx=-1; dx<=1&&!edge; dx++) {
+              if (!dx&&!dy) continue;
+              const nx=x+dx, ny=y+dy;
+              if (nx<0||nx>=W||ny<0||ny>=H) { edge=true; break; }
+              if (px[(ny*W+nx)*4+3]===0) edge=true;
+            }
+          if (edge) { px[i+3]=0; changed=true; }
+        }
+      }
+      if (!changed) break;
+    }
+
+    ctx.putImageData(id, 0, 0);
+    c.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      imgEl.onload = () => { URL.revokeObjectURL(url); resolve(); };
+      imgEl.src = url;
+    }, 'image/png');
+  });
+}
+
+// Clean both sprites before showing Alfred
+Promise.all([
+  cleanFringe(document.getElementById('spr-idle')),
+  cleanFringe(document.getElementById('spr-walk')),
+]).then(() => {
+  // Re-apply image-rendering after src replacement
+  document.querySelectorAll('.spr').forEach(s => s.style.imageRendering = 'pixelated');
+});
+
 // ── State machine ─────────────────────────────────────────────────────────────
 // States: 'idle' | 'walk' | 'talk'
 // All visual changes are driven by CSS classes — no JS style manipulation.

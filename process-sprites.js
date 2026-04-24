@@ -1,6 +1,7 @@
 // node process-sprites.js
 // Reprocesa ambos sprites desde los originales usando flood-fill desde bordes
 // (no global threshold → preserva camisa, ojos, corbata blanca)
+// Incluye paso de fringe removal para eliminar pixels anti-aliased residuales.
 const { Jimp } = require('jimp');
 const path = require('path');
 const fs   = require('fs');
@@ -37,6 +38,54 @@ function floodFillBg(img, isBg) {
   }
 }
 
+// ─── Fringe removal ─────────────────────────────────────────────────────────
+// El flood-fill con tolerancia ±20-25 deja pixels anti-aliased en los bordes
+// del personaje: mezclas parciales entre el fondo y el color del borde del
+// sprite. Estos aparecen como líneas blancas sobre fondos oscuros.
+//
+// Este paso usa tolerancia más amplia (±60) pero SOLO elimina pixels que:
+//   (a) son cercanos al color de fondo, Y
+//   (b) están adyacentes a un pixel ya transparente (verdadero borde externo)
+// Corre hasta 3 pasadas iterativas para cubrir bandas de fringe de varios pixels.
+function removeFringe(img, bgR, bgG, bgB, bgR2, bgG2, bgB2) {
+  const { width, height, data } = img.bitmap;
+  const TOL = 60;
+
+  function nearBg(i) {
+    if (data[i+3] === 0) return false;
+    const r = data[i], g = data[i+1], b = data[i+2];
+    const match1 = Math.abs(r-bgR)<TOL && Math.abs(g-bgG)<TOL && Math.abs(b-bgB)<TOL;
+    const match2 = bgR2 !== undefined
+      ? Math.abs(r-bgR2)<TOL && Math.abs(g-bgG2)<TOL && Math.abs(b-bgB2)<TOL
+      : false;
+    return match1 || match2;
+  }
+
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        if (data[i+3] === 0) continue;
+        if (!nearBg(i)) continue;
+
+        // Solo eliminar si el pixel está en el borde (adyacente a transparente)
+        let isEdge = false;
+        for (let dy = -1; dy <= 1 && !isEdge; dy++) {
+          for (let dx = -1; dx <= 1 && !isEdge; dx++) {
+            if (!dx && !dy) continue;
+            const nx = x+dx, ny = y+dy;
+            if (nx<0||nx>=width||ny<0||ny>=height) { isEdge=true; break; }
+            if (data[(ny*width+nx)*4+3] === 0) isEdge = true;
+          }
+        }
+        if (isEdge) { data[i+3] = 0; changed = true; }
+      }
+    }
+    if (!changed) break;
+  }
+}
+
 // ─── Sprite 1: alfred.png (fondo gris uniforme ~236,236,236) ───────────────
 async function processIdle() {
   const src  = 'C:/Users/bonzo/Downloads/Alfred.png';
@@ -55,6 +104,9 @@ async function processIdle() {
     const db = Math.abs(d[i+2] - bgB);
     return dr < 25 && dg < 25 && db < 25 && d[i+3] > 0;
   });
+
+  // Limpiar fringe anti-aliased residual
+  removeFringe(img, bgR, bgG, bgB);
 
   // Espejar → mira a la izquierda
   img.flip({ horizontal: true });
@@ -87,6 +139,9 @@ async function processWalk() {
     const matchW2 = Math.abs(r-w2R)<20 && Math.abs(g-w2G)<20 && Math.abs(b-w2B)<20;
     return matchW1 || matchW2;
   });
+
+  // Limpiar fringe de ambos colores del tablero
+  removeFringe(img, w1R, w1G, w1B, w2R, w2G, w2B);
 
   // Espejar → mira a la izquierda igual que idle
   img.flip({ horizontal: true });
