@@ -22,7 +22,7 @@ Alfred walks back and forth at the bottom of your screen. Driver's license expir
 
 | Dashboard — Today | Add a reminder | Settings & phone notifications |
 |:-:|:-:|:-:|
-| ![Today tab](docs/dashboard-today.png) | ![Add tab](docs/dashboard-add.png) | ![Settings tab](docs/dashboard-settings.png) |
+| ![Today tab](docs/dashboard-today.jpeg) | ![Add tab](docs/dashboard-add.jpeg) | ![Settings tab](docs/dashboard-settings.png) |
 
 > The interface uses the **Press Start 2P** pixel-art font and a full 8-bit aesthetic — chunky borders, pixel drop-shadows, and a retro color palette on a deep navy background.
 
