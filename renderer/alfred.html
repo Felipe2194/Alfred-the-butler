@@ -35,7 +35,7 @@
   /* ── Speech bubble (8-bit dialog style) ────────────────────────────────── */
   #bubble {
     position: fixed;
-    bottom: 222px;
+    bottom: 218px;
     left: 50%;
     transform: translateX(-50%);
     background: #f0f0ff;
@@ -187,18 +187,26 @@ function cleanFringe(imgEl) {
     const px  = id.data;
     const W   = c.width, H = c.height;
 
-    // Sample the background colour from the four corners and average them.
-    // The sprite edges will have remnants of this colour.
+    // Sample background colour from the four corners.
+    // If ALL corners are already transparent the sprite was fully processed by
+    // process-sprites.js — skip cleanup entirely to avoid eating real pixels.
     function corner(x, y) {
       const i = (y * W + x) * 4;
       return [px[i], px[i+1], px[i+2], px[i+3]];
     }
     const corners = [corner(0,0), corner(W-1,0), corner(0,H-1), corner(W-1,H-1)]
-      .filter(([,,,a]) => a > 0);  // skip already-transparent corners
-    const bgR = corners.length ? corners.reduce((s,[r])=>s+r,0)/corners.length : 236;
-    const bgG = corners.length ? corners.reduce((s,[,g])=>s+g,0)/corners.length : 236;
-    const bgB = corners.length ? corners.reduce((s,[,,b])=>s+b,0)/corners.length : 236;
-    const TOL = 60;  // wider than the original ±25 — catches partial anti-alias
+      .filter(([,,,a]) => a > 0);  // only opaque corners have background colour
+
+    if (!corners.length) {
+      // All corners transparent — sprite already clean, nothing to do
+      resolve();
+      return;
+    }
+
+    const bgR = corners.reduce((s,[r])=>s+r,0)/corners.length;
+    const bgG = corners.reduce((s,[,g])=>s+g,0)/corners.length;
+    const bgB = corners.reduce((s,[,,b])=>s+b,0)/corners.length;
+    const TOL = 30;  // conservative tolerance — only true background remnants
 
     function nearBg(i) {
       return Math.abs(px[i]  -bgR)<TOL &&

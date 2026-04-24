@@ -336,6 +336,10 @@ function advanceRecurring(item) {
   return true;
 }
 
+// Tracks the last date (YYYY-MM-DD) a phone notification was sent.
+// Prevents re-notifying every hourly check for the same active reminder.
+let lastPhoneNotifyDate = '';
+
 function checkReminders() {
   // Load the full data object so we can save back advanced recurring dates
   const data = loadData();
@@ -369,19 +373,25 @@ function checkReminders() {
 
   speak(`${name}, a reminder:\n` + lines.join('\n'), true);
 
-  // Phone notification — only fires if the user has configured an ntfy topic.
-  // Priority is 'high' if any item is already expired or due today.
-  const hasUrgent = urgent.some(i => i.days <= 0);
-  sendPhoneNotification(
-    'Alfred - Reminder',
-    lines.join('\n'),
-    hasUrgent ? 'high' : 'default'
-  );
+  // Phone notification — once per day maximum.
+  // checkReminders() runs every hour; without this guard it would spam ntfy
+  // all day long for any active reminder, burning through the rate limit fast.
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastPhoneNotifyDate !== today) {
+    lastPhoneNotifyDate = today;
+    const hasUrgent = urgent.some(i => i.days <= 0);
+    sendPhoneNotification(
+      'Alfred - Reminder',
+      lines.join('\n'),
+      hasUrgent ? 'high' : 'default'
+    );
+  }
 }
 
 // ─── Random butler phrases ─────────────────────────────────────────────────────
 // Add your own phrases here! Each entry is a function receiving the user's name.
 const PHRASES = [
+  // ── Butler classics ──────────────────────────────────────────────────────────
   n => `Everything alright, ${n}?`,
   n => `Do remember to stay hydrated, ${n}.`,
   n => `A gentleman is always prepared, ${n}.`,
@@ -392,6 +402,17 @@ const PHRASES = [
   n => `A cup of tea would do you well, ${n}.`,
   n => `Have you reviewed your pending items today, ${n}?`,
   n => `A fine day to stay on top of things, ${n}.`,
+  // ── Wayne Manor classics ─────────────────────────────────────────────────────
+  n => `Some men just want to watch the world burn, ${n}.\nI, however, prefer order.`,
+  n => `Know your limits, Master ${n}.`,
+  n => `Why do we fall, ${n}?\nSo that we can learn to pick ourselves up.`,
+  n => `Can I persuade you to take a sandwich with you, sir?`,
+  n => `You are as stubborn as your father, ${n}.\nI mean that as a compliment.`,
+  n => `The suit is pressed and ready, ${n}.\nShould you require it.`,
+  n => `I have prepared the car, ${n}.\nNot that you asked.`,
+  n => `Endure, Master ${n}.\nTake it. They'll hate you for it,\nbut that's the point.`,
+  n => `If you're not too busy saving the world,\nyour reminders await, ${n}.`,
+  n => `Even the strongest man needs rest, ${n}.\nAnd perhaps a sandwich.`,
 ];
 
 function scheduleRandom() {
