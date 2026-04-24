@@ -34,7 +34,8 @@
       "Bash(powershell -Command \"Get-Command gh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
       "Bash(powershell -Command \"winget list GitHub.cli\" 2>&1)",
       "Bash(powershell -Command \"winget install --id GitHub.cli -e --accept-package-agreements --accept-source-agreements\")",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(node:*)"
     ]
   }
 }

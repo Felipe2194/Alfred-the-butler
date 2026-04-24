@@ -5,21 +5,21 @@
 <!--
   alfred.html — Floating character window
   ========================================
-  This is a transparent, frameless Electron window that renders Alfred
+  Transparent, frameless Electron window that renders Alfred
   and his speech bubble. No framework — pure HTML/CSS/JS.
 
   HOW TO CONTRIBUTE:
   - Add new states (e.g. 'wave')  → add a CSS @keyframes + handle in setState()
-  - Change animation speed        → edit --walk-speed and --talk-speed variables
+  - Change walk speed             → edit WALK_MS constant in the script
   - Change bubble style           → edit #bubble styles
+  - Add walk frames               → add to WALK_FRAMES array + process-sprites.js
 -->
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 
   :root {
-    --walk-speed: 0.45s;   /* sprite cycle speed while walking */
-    --talk-speed: 0.4s;    /* wobble speed while talking       */
-    --float-speed: 3s;     /* idle floating speed              */
+    --talk-speed:  0.4s;
+    --float-speed: 3s;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -53,7 +53,7 @@
     display: none;
     z-index: 999;
   }
-  /* Pixel-art blinking ▼ cursor inside the bubble */
+  /* Blinking ▼ cursor */
   #bubble::before {
     content: '▼';
     position: absolute;
@@ -66,7 +66,7 @@
     0%, 49% { opacity: 1; }
     50%, 100% { opacity: 0; }
   }
-  /* Tail of the bubble */
+  /* Bubble tail */
   #bubble::after {
     content: '';
     position: absolute;
@@ -93,69 +93,44 @@
     cursor: pointer;
   }
 
-  /* Both sprites stacked on top of each other */
-  .spr {
+  #spr {
     position: absolute;
     top: 0; left: 0;
     width: 112px; height: 112px;
     image-rendering: pixelated;
   }
 
-  /* ── Idle animation: gentle float ───────────────────────────────────────── */
+  /* ── Idle: gentle float ─────────────────────────────────────────────────── */
   @keyframes float {
     0%, 100% { transform: translateY(0);    }
     50%       { transform: translateY(-4px); }
   }
 
-  /* ── Walk animation: CSS cycles between idle/walk sprites ───────────────── */
-  /* This replaces the old JS walk-tick IPC (was 33 calls/sec → now 0).       */
-  /* The idle sprite fades in/out on a stepped cycle; walk sprite is inverse.  */
-  @keyframes sprite-cycle {
-    0%, 49.9% { opacity: 1; }
-    50%, 100%  { opacity: 0; }
-  }
-
-  /* ── Talk animation: head wobble ────────────────────────────────────────── */
+  /* ── Talk: head wobble ──────────────────────────────────────────────────── */
   @keyframes talk {
     0%, 100% { transform: translateY(0)    rotate(0deg);    }
     25%       { transform: translateY(-3px) rotate(-1.5deg); }
     75%       { transform: translateY(-3px) rotate(1.5deg);  }
   }
 
-  /* ── State: idle (default) ───────────────────────────────────────────────── */
-  #spr-idle { animation: float var(--float-speed) ease-in-out infinite; }
-  #spr-walk { display: none; }
+  /* State classes control which CSS animation runs on the sprite */
+  #alfred-wrap.idle   #spr { animation: float var(--float-speed) ease-in-out infinite; }
+  #alfred-wrap.talking #spr { animation: talk  var(--talk-speed)  ease-in-out infinite; }
+  #alfred-wrap.walking #spr { animation: none; }
 
-  /* ── State: walking ──────────────────────────────────────────────────────── */
-  #alfred-wrap.walking #spr-idle {
-    display: block;
-    animation: sprite-cycle var(--walk-speed) steps(1, end) infinite;
-  }
-  #alfred-wrap.walking #spr-walk {
-    display: block;
-    animation: sprite-cycle var(--walk-speed) steps(1, end) infinite reverse;
-  }
-
-  /* ── State: talking ──────────────────────────────────────────────────────── */
-  #alfred-wrap.talking #spr-idle {
-    animation: talk var(--talk-speed) ease-in-out infinite;
-  }
-  #alfred-wrap.talking #spr-walk { display: none; }
-
-  /* ── Direction: facing right (mirror all sprites via parent) ─────────────── */
+  /* ── Direction: facing right (mirror via parent) ────────────────────────── */
   #alfred-wrap.facing-right { transform: translateX(-50%) scaleX(-1); }
 
   /* Hover highlight */
-  #alfred-wrap:hover .spr { filter: brightness(1.12); }
+  #alfred-wrap:hover #spr { filter: brightness(1.12); }
 </style>
 </head>
 <body>
 
 <div id="bubble"></div>
 
-<div id="alfred-wrap" title="Click to open dashboard">
-  <img id="spr-idle" class="spr" src="../assets/alfred.png"      alt="" draggable="false">
-  <img id="spr-walk" class="spr" src="../assets/alfred-walk.png" alt="" draggable="false">
+<div id="alfred-wrap" class="idle" title="Click to open dashboard">
+  <img id="spr" src="../assets/alfred-idle.png" alt="" draggable="false">
 </div>
 
 <script>
@@ -163,130 +138,53 @@
 const { ipcRenderer } = require('electron');
 
 const wrap   = document.getElementById('alfred-wrap');
+const spr    = document.getElementById('spr');
 const bubble = document.getElementById('bubble');
 
-// ── Sprite fringe cleanup ─────────────────────────────────────────────────────
-// The background-removal scripts leave anti-aliased "fringe" pixels at the
-// character's edges — near-white remnants of the original background that appear
-// as white lines when Alfred walks over dark surfaces.
-//
-// This Canvas pass runs once per sprite at load-time:
-//   1. Replicate the flood-fill with a wider tolerance (±60 vs ±25)
-//      starting from the four edges of the bitmap.
-//   2. Up to 3 iterative edge-erosion passes to catch multi-pixel fringe bands.
-// Only pixels that are BOTH near the background colour AND adjacent to a
-// transparent pixel are removed — interior character pixels are untouched.
-function cleanFringe(imgEl) {
-  return new Promise(resolve => {
-    const c   = document.createElement('canvas');
-    c.width   = imgEl.naturalWidth;
-    c.height  = imgEl.naturalHeight;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(imgEl, 0, 0);
-    const id  = ctx.getImageData(0, 0, c.width, c.height);
-    const px  = id.data;
-    const W   = c.width, H = c.height;
+// ── Frame sources ─────────────────────────────────────────────────────────────
+const IDLE_FRAME  = '../assets/alfred-idle.png';
+const WALK_FRAMES = [
+  '../assets/alfred-walk-1.png',
+  '../assets/alfred-walk-2.png',
+  '../assets/alfred-walk-3.png',
+  '../assets/alfred-walk-4.png',
+];
+const WALK_MS = 140;  // ms per walk frame (~7 fps) — edit to taste
 
-    // Sample background colour from the four corners.
-    // If ALL corners are already transparent the sprite was fully processed by
-    // process-sprites.js — skip cleanup entirely to avoid eating real pixels.
-    function corner(x, y) {
-      const i = (y * W + x) * 4;
-      return [px[i], px[i+1], px[i+2], px[i+3]];
-    }
-    const corners = [corner(0,0), corner(W-1,0), corner(0,H-1), corner(W-1,H-1)]
-      .filter(([,,,a]) => a > 0);  // only opaque corners have background colour
-
-    if (!corners.length) {
-      // All corners transparent — sprite already clean, nothing to do
-      resolve();
-      return;
-    }
-
-    const bgR = corners.reduce((s,[r])=>s+r,0)/corners.length;
-    const bgG = corners.reduce((s,[,g])=>s+g,0)/corners.length;
-    const bgB = corners.reduce((s,[,,b])=>s+b,0)/corners.length;
-    const TOL = 30;  // conservative tolerance — only true background remnants
-
-    function nearBg(i) {
-      return Math.abs(px[i]  -bgR)<TOL &&
-             Math.abs(px[i+1]-bgG)<TOL &&
-             Math.abs(px[i+2]-bgB)<TOL &&
-             px[i+3] > 0;
-    }
-
-    // ── Step 1: flood-fill from all four edges (same as process-sprites.js) ──
-    const visited = new Uint8Array(W * H);
-    const queue   = [];
-
-    function enq(x, y) {
-      if (x<0||x>=W||y<0||y>=H) return;
-      const pos = y*W+x;
-      if (visited[pos]) return;
-      if (!nearBg(pos*4)) return;
-      visited[pos] = 1;
-      queue.push(x, y);
-    }
-    for (let x=0;x<W;x++) { enq(x,0); enq(x,H-1); }
-    for (let y=0;y<H;y++) { enq(0,y); enq(W-1,y); }
-
-    let head = 0;
-    while (head < queue.length) {
-      const x = queue[head++], y = queue[head++];
-      px[(y*W+x)*4+3] = 0;
-      enq(x+1,y); enq(x-1,y); enq(x,y+1); enq(x,y-1);
-      enq(x+1,y+1); enq(x-1,y-1); enq(x+1,y-1); enq(x-1,y+1);
-    }
-
-    // ── Step 2: iterative edge erosion — catches fringe the flood-fill missed ──
-    for (let pass = 0; pass < 3; pass++) {
-      let changed = false;
-      for (let y=0;y<H;y++) {
-        for (let x=0;x<W;x++) {
-          const i = (y*W+x)*4;
-          if (px[i+3]===0) continue;
-          if (!nearBg(i)) continue;
-          // Only remove if adjacent to a transparent pixel (true edge fringe)
-          let edge = false;
-          for (let dy=-1; dy<=1&&!edge; dy++)
-            for (let dx=-1; dx<=1&&!edge; dx++) {
-              if (!dx&&!dy) continue;
-              const nx=x+dx, ny=y+dy;
-              if (nx<0||nx>=W||ny<0||ny>=H) { edge=true; break; }
-              if (px[(ny*W+nx)*4+3]===0) edge=true;
-            }
-          if (edge) { px[i+3]=0; changed=true; }
-        }
-      }
-      if (!changed) break;
-    }
-
-    ctx.putImageData(id, 0, 0);
-    c.toBlob(blob => {
-      const url = URL.createObjectURL(blob);
-      imgEl.onload = () => { URL.revokeObjectURL(url); resolve(); };
-      imgEl.src = url;
-    }, 'image/png');
-  });
-}
-
-// Clean both sprites before showing Alfred
-Promise.all([
-  cleanFringe(document.getElementById('spr-idle')),
-  cleanFringe(document.getElementById('spr-walk')),
-]).then(() => {
-  // Re-apply image-rendering after src replacement
-  document.querySelectorAll('.spr').forEach(s => s.style.imageRendering = 'pixelated');
-});
+// Preload all frames so src swaps are instant (no flicker)
+[IDLE_FRAME, ...WALK_FRAMES].forEach(src => { const i = new Image(); i.src = src; });
 
 // ── State machine ─────────────────────────────────────────────────────────────
 // States: 'idle' | 'walk' | 'talk'
-// All visual changes are driven by CSS classes — no JS style manipulation.
+let walkTimer  = null;
+let walkIndex  = 0;
 
 function setState(state) {
-  wrap.classList.remove('walking', 'talking');
-  if (state === 'walk') wrap.classList.add('walking');
-  if (state === 'talk') wrap.classList.add('talking');
+  // Clear any running walk animation
+  clearInterval(walkTimer);
+  walkTimer = null;
+
+  // Reset CSS state classes
+  wrap.classList.remove('idle', 'walking', 'talking');
+
+  if (state === 'walk') {
+    wrap.classList.add('walking');
+    walkIndex = 0;
+    spr.src   = WALK_FRAMES[walkIndex];
+    walkTimer = setInterval(() => {
+      walkIndex = (walkIndex + 1) % WALK_FRAMES.length;
+      spr.src   = WALK_FRAMES[walkIndex];
+    }, WALK_MS);
+
+  } else if (state === 'talk') {
+    wrap.classList.add('talking');
+    spr.src = IDLE_FRAME;
+
+  } else {
+    // idle
+    wrap.classList.add('idle');
+    spr.src = IDLE_FRAME;
+  }
 }
 
 function setDir(dir) {
@@ -305,8 +203,8 @@ function showBubble(text) {
   clearTimeout(bubbleTimer);
   bubbleTimer = setTimeout(() => {
     bubble.classList.remove('visible');
-    // Return to idle; main.js will resume walking via pauseWalking timeout
     setState('idle');
+    // main.js will resume walking via pauseWalking timeout
   }, 5000 + text.split('\n').length * 1200);
 }
 

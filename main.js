@@ -55,79 +55,43 @@ let alfredWin = null;   // Transparent floating character window
 let dashWin   = null;   // Dashboard popup
 
 // ─── Timers ────────────────────────────────────────────────────────────────────
-let walkInterval  = null;   // Move Alfred across screen
-let pauseTimeout  = null;   // Pause between walk segments
 let checkInterval = null;   // Hourly reminder check
 let randomTimeout = null;   // Random butler quip timer
 
-// ─── Walker config ─────────────────────────────────────────────────────────────
-// To make Alfred faster/slower → change WALK_SPEED (px per tick)
-// To reduce CPU usage further  → increase WALK_TICK (ms between ticks)
-const ALFRED_W   = 120;   // Window width  (px)
-const ALFRED_H   = 220;   // Window height (px) — extra room for speech bubble
-const WALK_SPEED = 1.5;   // Pixels per tick
-const WALK_TICK  = 50;    // 20 fps — smooth enough for pixel art, easy on CPU
-
-let walker = {
-  x: 0, y: 0,
-  dir: -1,        // -1 = left, +1 = right
-  targetX: 0,
-  moving: false,
-  minX: 0, maxX: 0,
-};
-
-/** Pick a random destination, avoiding the last 120px of each edge */
-function randomTarget() {
-  const margin = 120;
-  const range  = walker.maxX - walker.minX - margin * 2;
-  return walker.minX + margin + Math.floor(Math.random() * range);
-}
+// ─── Alfred position config ────────────────────────────────────────────────────
+const ALFRED_W = 120;   // Window width  (px)
+const ALFRED_H = 220;   // Window height (px) — extra room for speech bubble
 
 // ─── Alfred window ─────────────────────────────────────────────────────────────
 function createAlfredWindow() {
-  const { workArea: wa, bounds } = screen.getPrimaryDisplay();
+  const { workArea: wa } = screen.getPrimaryDisplay();
 
-  // Walk across the full screen width; feet sit on the taskbar/dock top edge.
-  // Math.round prevents sub-pixel drift that can push Alfred 1px into the taskbar.
-  walker.minX = bounds.x + 8;
-  walker.maxX = bounds.x + bounds.width - ALFRED_W - 8;
-  walker.y    = Math.round(wa.y + wa.height - ALFRED_H);
-  walker.x    = walker.maxX;
-  walker.targetX = randomTarget();
-  walker.dir  = -1;
+  // Fixed position: bottom-right corner, just above the taskbar/dock.
+  const x = Math.round(wa.x + wa.width  - ALFRED_W - 16);
+  const y = Math.round(wa.y + wa.height - ALFRED_H);
 
-  // On macOS the Dock has a higher z-order than normal windows, so Alfred would
-  // disappear behind it. Using alwaysOnTop:true with level 'floating' keeps him
-  // visible above the Dock while still letting modal dialogs cover him.
-  // On Windows the taskbar is always-on-top regardless of our setting, so we
-  // leave Alfred at the normal z-level so regular app windows cover him naturally.
   const isMac = process.platform === 'darwin';
 
   alfredWin = new BrowserWindow({
     width: ALFRED_W, height: ALFRED_H,
-    x: Math.round(walker.x), y: Math.round(walker.y),
+    x, y,
     transparent: true,
     frame: false,
-    alwaysOnTop: isMac,   // macOS: float above Dock; Windows: normal z-level
-    skipTaskbar: true,    // No taskbar/Dock button for Alfred
+    alwaysOnTop: isMac,
+    skipTaskbar: true,
     resizable: false,
     hasShadow: false,
-    show: false,          // Hidden until HTML is ready (prevents white-flash ghost)
+    show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
 
-  // On macOS keep Alfred at the 'floating' level — above normal windows and the
-  // Dock, but below full-screen apps and screen savers.
   if (isMac) alfredWin.setAlwaysOnTop(true, 'floating');
 
   alfredWin.loadFile(path.join(__dirname, 'renderer', 'alfred.html'));
 
   alfredWin.webContents.once('did-finish-load', () => {
     alfredWin.show();
-    walker.moving = true;
-    sendToAlfred('set-dir', walker.dir);
-    sendToAlfred('set-state', 'walk');
-    startWalkLoop();
+    sendToAlfred('set-state', 'idle');
   });
 }
 
@@ -137,66 +101,6 @@ function sendToAlfred(channel, data) {
     alfredWin.webContents.send(channel, data);
 }
 
-// ─── Walk loop ─────────────────────────────────────────────────────────────────
-// Moves the Electron window position each tick. Sprite animation is handled
-// entirely by CSS in alfred.html — no IPC needed per frame.
-function startWalkLoop() {
-  if (walkInterval) clearInterval(walkInterval);
-
-  walkInterval = setInterval(() => {
-    if (!alfredWin || alfredWin.isDestroyed() || !walker.moving) return;
-
-    const diff = walker.targetX - walker.x;
-
-    if (Math.abs(diff) <= WALK_SPEED) {
-      // Arrived at destination → idle pause
-      walker.x = walker.targetX;
-      walker.moving = false;
-      alfredWin.setPosition(Math.round(walker.x), Math.round(walker.y));
-      sendToAlfred('set-state', 'idle');
-      scheduleNextWalk();
-      return;
-    }
-
-    // Only send direction change when it actually flips (not every tick)
-    const newDir = diff > 0 ? 1 : -1;
-    if (newDir !== walker.dir) {
-      walker.dir = newDir;
-      sendToAlfred('set-dir', walker.dir);
-    }
-
-    walker.x += WALK_SPEED * walker.dir;
-    alfredWin.setPosition(Math.round(walker.x), Math.round(walker.y));
-  }, WALK_TICK);
-}
-
-/** Wait 3–8 s at destination, then pick a new random target */
-function scheduleNextWalk() {
-  if (pauseTimeout) clearTimeout(pauseTimeout);
-  pauseTimeout = setTimeout(() => {
-    if (!alfredWin || alfredWin.isDestroyed()) return;
-    walker.targetX = randomTarget();
-    walker.dir     = walker.targetX > walker.x ? 1 : -1;
-    walker.moving  = true;
-    sendToAlfred('set-dir', walker.dir);
-    sendToAlfred('set-state', 'walk');
-  }, 3000 + Math.random() * 5000);
-}
-
-/** Pause walking for `ms` milliseconds (called while Alfred is speaking) */
-function pauseWalking(ms) {
-  if (pauseTimeout) clearTimeout(pauseTimeout);
-  walker.moving = false;
-  sendToAlfred('set-state', 'idle');
-  pauseTimeout = setTimeout(() => {
-    if (!alfredWin || alfredWin.isDestroyed()) return;
-    walker.targetX = randomTarget();
-    walker.dir     = walker.targetX > walker.x ? 1 : -1;
-    walker.moving  = true;
-    sendToAlfred('set-dir', walker.dir);
-    sendToAlfred('set-state', 'walk');
-  }, ms);
-}
 
 // ─── Alfred speaking ───────────────────────────────────────────────────────────
 /**
@@ -212,14 +116,11 @@ function speak(text, urgent = false) {
   if (urgent) {
     alfredWin.setAlwaysOnTop(true, 'screen-saver');
     sendToAlfred('speak', text);
-    pauseWalking(ms);
     setTimeout(() => {
       if (alfredWin && !alfredWin.isDestroyed()) alfredWin.setAlwaysOnTop(false);
     }, ms + 500);
   } else {
-    // Quiet quip — Alfred speaks only if user happens to be on the desktop
     sendToAlfred('speak', text);
-    pauseWalking(ms);
   }
 }
 
@@ -466,8 +367,6 @@ app.on('window-all-closed', e => e.preventDefault());
 app.on('second-instance', createDashWindow);
 
 app.on('before-quit', () => {
-  clearInterval(walkInterval);
   clearInterval(checkInterval);
-  clearTimeout(pauseTimeout);
   clearTimeout(randomTimeout);
 });

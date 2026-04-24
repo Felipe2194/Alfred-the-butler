@@ -1,156 +1,214 @@
 // node process-sprites.js
-// Reprocesa ambos sprites desde los originales usando flood-fill desde bordes
-// (no global threshold → preserva camisa, ojos, corbata blanca)
-// Incluye paso de fringe removal para eliminar pixels anti-aliased residuales.
-const { Jimp } = require('jimp');
-const path = require('path');
-const fs   = require('fs');
+// Extracts all 5 Alfred frames from AlfredTotal.png and saves them individually.
+//
+// Sheet layout (3 cols × 2 rows, 2048×2048):
+//   [0,0] idle      [1,0] walk-1   [2,0] walk-2
+//   [0,1] walk-3    [1,1] walk-4   [2,1] (empty)
+//
+// Each frame is:
+//   1. Cropped from its grid cell
+//   2. Background-removed via flood-fill from edges + fringe erosion
+//   3. Trimmed to tight bounding box
+//   4. Padded to a common square size (bottom-aligned, centered)
+//   5. Mirrored horizontally so Alfred faces left by default
+//   6. Saved to assets/
 
-// ─── Flood fill desde bordes ────────────────────────────────────────────────
-// Solo hace transparente los pixels conectados al exterior que coincidan con
-// la condicion isBg. El interior del personaje queda intacto.
-function floodFillBg(img, isBg) {
+const { Jimp } = require('jimp');
+const path     = require('path');
+
+const SRC  = 'C:/Users/bonzo/Downloads/AlfredTotal.png';
+const DEST = path.join(__dirname, 'assets');
+
+// ─── Background detection ──────────────────────────────────────────────────
+// White background with tolerance to handle slight JPEG-style artifacts.
+function isBg(r, g, b) {
+  return r > 210 && g > 210 && b > 210;
+}
+
+// ─── Remove background from a Jimp image in-place ─────────────────────────
+// Step 1 — flood-fill from all four edges (connected background only).
+// Step 2 — fringe erosion: remove near-white pixels adjacent to transparency.
+function removeBg(img) {
   const { width, height, data } = img.bitmap;
   const visited = new Uint8Array(width * height);
   const queue   = [];
 
-  function enqueue(x, y) {
+  function enq(x, y) {
     if (x < 0 || x >= width || y < 0 || y >= height) return;
     const pos = y * width + x;
     if (visited[pos]) return;
-    if (!isBg(data, pos * 4)) return;
+    const i = pos * 4;
+    if (data[i + 3] === 0) return;
+    if (!isBg(data[i], data[i + 1], data[i + 2])) return;
     visited[pos] = 1;
     queue.push(x, y);
   }
 
-  // Sembrar todos los bordes
-  for (let x = 0; x < width;  x++) { enqueue(x, 0); enqueue(x, height - 1); }
-  for (let y = 0; y < height; y++) { enqueue(0, y); enqueue(width - 1, y); }
+  for (let x = 0; x < width;  x++) { enq(x, 0); enq(x, height - 1); }
+  for (let y = 0; y < height; y++) { enq(0, y); enq(width - 1, y);  }
 
   let head = 0;
   while (head < queue.length) {
-    const x = queue[head++];
-    const y = queue[head++];
-    data[(y * width + x) * 4 + 3] = 0; // transparente
-    // 8 vecinos para no dejar pixels colgados en esquinas
-    enqueue(x+1,y); enqueue(x-1,y); enqueue(x,y+1); enqueue(x,y-1);
-    enqueue(x+1,y+1); enqueue(x-1,y-1); enqueue(x+1,y-1); enqueue(x-1,y+1);
-  }
-}
-
-// ─── Fringe removal ─────────────────────────────────────────────────────────
-// El flood-fill con tolerancia ±20-25 deja pixels anti-aliased en los bordes
-// del personaje: mezclas parciales entre el fondo y el color del borde del
-// sprite. Estos aparecen como líneas blancas sobre fondos oscuros.
-//
-// Este paso usa tolerancia más amplia (±60) pero SOLO elimina pixels que:
-//   (a) son cercanos al color de fondo, Y
-//   (b) están adyacentes a un pixel ya transparente (verdadero borde externo)
-// Corre hasta 3 pasadas iterativas para cubrir bandas de fringe de varios pixels.
-function removeFringe(img, bgR, bgG, bgB, bgR2, bgG2, bgB2) {
-  const { width, height, data } = img.bitmap;
-  const TOL = 60;
-
-  function nearBg(i) {
-    if (data[i+3] === 0) return false;
-    const r = data[i], g = data[i+1], b = data[i+2];
-    const match1 = Math.abs(r-bgR)<TOL && Math.abs(g-bgG)<TOL && Math.abs(b-bgB)<TOL;
-    const match2 = bgR2 !== undefined
-      ? Math.abs(r-bgR2)<TOL && Math.abs(g-bgG2)<TOL && Math.abs(b-bgB2)<TOL
-      : false;
-    return match1 || match2;
+    const x = queue[head++], y = queue[head++];
+    data[(y * width + x) * 4 + 3] = 0;
+    enq(x+1,y); enq(x-1,y); enq(x,y+1); enq(x,y-1);
+    enq(x+1,y+1); enq(x-1,y-1); enq(x+1,y-1); enq(x-1,y+1);
   }
 
-  for (let pass = 0; pass < 3; pass++) {
-    let changed = false;
+  // Fringe erosion — two passes to remove anti-aliased edge remnants
+  for (let pass = 0; pass < 2; pass++) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const i = (y * width + x) * 4;
-        if (data[i+3] === 0) continue;
-        if (!nearBg(i)) continue;
-
-        // Solo eliminar si el pixel está en el borde (adyacente a transparente)
-        let isEdge = false;
-        for (let dy = -1; dy <= 1 && !isEdge; dy++) {
-          for (let dx = -1; dx <= 1 && !isEdge; dx++) {
+        if (data[i + 3] === 0) continue;
+        if (!isBg(data[i], data[i + 1], data[i + 2])) continue;
+        let edge = false;
+        for (let dy = -1; dy <= 1 && !edge; dy++) {
+          for (let dx = -1; dx <= 1 && !edge; dx++) {
             if (!dx && !dy) continue;
-            const nx = x+dx, ny = y+dy;
-            if (nx<0||nx>=width||ny<0||ny>=height) { isEdge=true; break; }
-            if (data[(ny*width+nx)*4+3] === 0) isEdge = true;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) { edge = true; break; }
+            if (data[(ny * width + nx) * 4 + 3] === 0) edge = true;
           }
         }
-        if (isEdge) { data[i+3] = 0; changed = true; }
+        if (edge) data[i + 3] = 0;
       }
     }
-    if (!changed) break;
   }
 }
 
-// ─── Sprite 1: alfred.png (fondo gris uniforme ~236,236,236) ───────────────
-async function processIdle() {
-  const src  = 'C:/Users/bonzo/Downloads/Alfred.png';
-  const dest = path.join(__dirname, 'assets', 'alfred.png');
-
-  const img = await Jimp.read(src);
-
-  // Muestrear el color exacto del fondo desde la esquina
-  const { data, width } = img.bitmap;
-  const bgR = data[0], bgG = data[1], bgB = data[2];
-  console.log('alfred.png bg color sampled:', bgR, bgG, bgB);
-
-  floodFillBg(img, (d, i) => {
-    const dr = Math.abs(d[i]   - bgR);
-    const dg = Math.abs(d[i+1] - bgG);
-    const db = Math.abs(d[i+2] - bgB);
-    return dr < 25 && dg < 25 && db < 25 && d[i+3] > 0;
-  });
-
-  // Limpiar fringe anti-aliased residual
-  removeFringe(img, bgR, bgG, bgB);
-
-  // Espejar → mira a la izquierda
-  img.flip({ horizontal: true });
-
-  await img.write(dest);
-  console.log('✓ alfred.png procesado');
+// ─── Tight bounding box of non-transparent pixels ─────────────────────────
+function boundingBox(img) {
+  const { width, height, data } = img.bitmap;
+  let minX = width, maxX = 0, minY = height, maxY = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  return { minX, maxX, minY, maxY };
 }
 
-// ─── Sprite 2: alfred-walk.png (fondo tablero blanco+gris claro) ──────────
-async function processWalk() {
-  const src  = 'C:/Users/bonzo/Downloads/Alfred movimientos.png';
-  const dest = path.join(__dirname, 'assets', 'alfred-walk.png');
+// ─── Find column ranges where sprites live ────────────────────────────────
+// Scans the sheet row-by-row to find vertical bands of non-background pixels.
+// Returns an array of {x0, x1} ranges, one per sprite column.
+function findSpriteColumns(img, rowY, rowH, minGap = 20) {
+  const { width, data } = img.bitmap;
+  const colHasContent = new Uint8Array(width);
 
-  const img = await Jimp.read(src);
-  const { data, width, height } = img.bitmap;
+  for (let y = rowY; y < rowY + rowH; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] > 0 && !isBg(data[i], data[i+1], data[i+2])) {
+        colHasContent[x] = 1;
+      }
+    }
+  }
 
-  // El tablero tiene dos colores — muestrear ambos
-  // Esquina sup-izq: blanco ~254,254,254
-  // Pixel (1,1): gris claro ~241,241,240
-  const w1R = data[0], w1G = data[1], w1B = data[2];
-  const w2R = data[((1*width+1)*4)], w2G = data[((1*width+1)*4)+1], w2B = data[((1*width+1)*4)+2];
-  console.log('Walk bg color 1 (corner):', w1R, w1G, w1B);
-  console.log('Walk bg color 2 (1,1):', w2R, w2G, w2B);
-
-  floodFillBg(img, (d, i) => {
-    const r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
-    if (a === 0) return false;
-    // Coincide con alguno de los dos tonos del tablero
-    const matchW1 = Math.abs(r-w1R)<20 && Math.abs(g-w1G)<20 && Math.abs(b-w1B)<20;
-    const matchW2 = Math.abs(r-w2R)<20 && Math.abs(g-w2G)<20 && Math.abs(b-w2B)<20;
-    return matchW1 || matchW2;
-  });
-
-  // Limpiar fringe de ambos colores del tablero
-  removeFringe(img, w1R, w1G, w1B, w2R, w2G, w2B);
-
-  // Espejar → mira a la izquierda igual que idle
-  img.flip({ horizontal: true });
-
-  await img.write(dest);
-  console.log('✓ alfred-walk.png procesado');
+  const ranges = [];
+  let inSprite = false, start = 0;
+  for (let x = 0; x < width; x++) {
+    if (!inSprite && colHasContent[x]) { inSprite = true; start = x; }
+    if (inSprite && !colHasContent[x]) {
+      // Check if gap is long enough to be a real separator
+      let gapEnd = x;
+      while (gapEnd < width && !colHasContent[gapEnd]) gapEnd++;
+      if (gapEnd - x >= minGap || gapEnd >= width) {
+        ranges.push({ x0: start, x1: x - 1 });
+        inSprite = false;
+        x = gapEnd - 1;
+      }
+    }
+  }
+  if (inSprite) ranges.push({ x0: start, x1: width - 1 });
+  return ranges;
 }
 
-// ─── Run ───────────────────────────────────────────────────────────────────
-Promise.all([processIdle(), processWalk()])
-  .then(() => console.log('\nAmbos sprites listos.'))
-  .catch(err => console.error('Error:', err.message));
+// ─── Main ──────────────────────────────────────────────────────────────────
+async function extract() {
+  console.log('Reading sprite sheet…');
+  const sheet = await Jimp.read(SRC);
+  const W = sheet.bitmap.width;   // 2048
+  const H = sheet.bitmap.height;  // 2048
+
+  const rowH = Math.floor(H / 2);  // ~1024 per row
+
+  // Auto-detect sprite column boundaries per row
+  const row0cols = findSpriteColumns(sheet, 0,    rowH);
+  const row1cols = findSpriteColumns(sheet, rowH, rowH);
+  console.log(`Row 0: ${row0cols.length} sprites detected`);
+  console.log(`Row 1: ${row1cols.length} sprites detected`);
+
+  const cells = [
+    { x0: row0cols[0].x0, x1: row0cols[0].x1, y0: 0,    name: 'alfred-idle'   },
+    { x0: row0cols[1].x0, x1: row0cols[1].x1, y0: 0,    name: 'alfred-walk-1' },
+    { x0: row0cols[2].x0, x1: row0cols[2].x1, y0: 0,    name: 'alfred-walk-2' },
+    { x0: row1cols[0].x0, x1: row1cols[0].x1, y0: rowH, name: 'alfred-walk-3' },
+    { x0: row1cols[1].x0, x1: row1cols[1].x1, y0: rowH, name: 'alfred-walk-4' },
+  ];
+
+  // ── Pass 1: extract, remove bg, find bounding boxes ─────────────────────
+  const extracted = [];
+  for (const cell of cells) {
+    process.stdout.write(`  Extracting ${cell.name}…`);
+
+    const cellW = cell.x1 - cell.x0 + 1;
+
+    // Crop cell from sheet using detected boundaries
+    const cropped = sheet.clone().crop({ x: cell.x0, y: cell.y0, w: cellW, h: rowH });
+
+    // Remove background
+    removeBg(cropped);
+
+    // Tight bounding box
+    const bb = boundingBox(cropped);
+    const sprW = bb.maxX - bb.minX + 1;
+    const sprH = bb.maxY - bb.minY + 1;
+
+    // Crop to tight bounds
+    const tight = cropped.crop({ x: bb.minX, y: bb.minY, w: sprW, h: sprH });
+
+    extracted.push({ img: tight, sprW, sprH, name: cell.name });
+    console.log(` ${sprW}×${sprH}px`);
+  }
+
+  // ── Pass 2: normalize to common square size ──────────────────────────────
+  const maxW  = Math.max(...extracted.map(e => e.sprW));
+  const maxH  = Math.max(...extracted.map(e => e.sprH));
+  const SIZE  = Math.max(maxW, maxH);
+  console.log(`\nNormalising all frames to ${SIZE}×${SIZE}px…`);
+
+  for (const e of extracted) {
+    // Transparent canvas of SIZE×SIZE
+    const canvas = new Jimp({ width: SIZE, height: SIZE, color: 0x00000000 });
+
+    // Bottom-aligned, horizontally centered
+    const offsetX = Math.floor((SIZE - e.sprW) / 2);
+    const offsetY = SIZE - e.sprH;
+
+    canvas.composite(e.img, offsetX, offsetY);
+
+    // Mirror so Alfred faces left by default (matching old sprite orientation)
+    canvas.flip({ horizontal: true });
+
+    const dest = path.join(DEST, `${e.name}.png`);
+    await canvas.write(dest);
+    console.log(`  ✓ ${e.name}.png`);
+  }
+
+  // Keep backward-compatible aliases so old code referencing alfred.png still works
+  const idle = await Jimp.read(path.join(DEST, 'alfred-idle.png'));
+  await idle.write(path.join(DEST, 'alfred.png'));
+  const walk1 = await Jimp.read(path.join(DEST, 'alfred-walk-1.png'));
+  await walk1.write(path.join(DEST, 'alfred-walk.png'));
+
+  console.log('\n✓ All 5 frames ready. Backward-compatible aliases written.');
+  console.log('  Restart Alfred to see the smooth 4-frame walk cycle.');
+}
+
+extract().catch(err => console.error('Error:', err.message));
