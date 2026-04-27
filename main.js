@@ -127,10 +127,10 @@ function speak(text, urgent = false) {
 
   // Brief thinking pause before the actual message
   sendToAlfred('think');
-  setTimeout(() => sendToAlfred('speak', text), 800);
+  setTimeout(() => sendToAlfred('speak', text), 400);
 
   if (urgent) {
-    const safeMs = 800 + 5000 + text.split('\n').length * 1200 + 4000;
+    const safeMs = 400 + 3500 + text.split('\n').length * 900 + 2000;
     setTimeout(() => {
       if (alfredWin && !alfredWin.isDestroyed()) alfredWin.setAlwaysOnTop(false);
     }, safeMs);
@@ -166,6 +166,8 @@ function createTray() {
     { label: 'Open Dashboard',    click: createDashWindow },
     { label: 'Show / Hide Alfred', click: () =>
         alfredWin.isVisible() ? alfredWin.hide() : alfredWin.show() },
+    { label: 'Say something, Alfred', click: () =>
+        speak(PHRASES[Math.floor(Math.random() * PHRASES.length)](getSirName())) },
     { type: 'separator' },
     {
       label: 'Theme', submenu: [
@@ -307,7 +309,7 @@ function scheduleRandom() {
   randomTimeout = setTimeout(() => {
     speak(PHRASES[Math.floor(Math.random() * PHRASES.length)](getSirName()));
     scheduleRandom();
-  }, (20 + Math.floor(Math.random() * 25)) * 60 * 1000);
+  }, (5 + Math.floor(Math.random() * 8)) * 60 * 1000);
 }
 
 // ─── Startup greeting ──────────────────────────────────────────────────────────
@@ -329,6 +331,9 @@ ipcMain.handle('get-data-path', ()        => DATA_FILE);
 ipcMain.handle('update-name',   ()        => true);
 ipcMain.handle('ntfy-test', (_, { topic, token }) =>
   sendPhoneNotification('Alfred - Test', 'Test successful! Alfred is ready to serve.', 'default', topic, token));
+
+ipcMain.handle('say-random', () =>
+  speak(PHRASES[Math.floor(Math.random() * PHRASES.length)](getSirName())));
 
 // Pixel-perfect hit detection — renderer tells us when cursor is over a visible pixel.
 // setIgnoreMouseEvents(true, { forward: true }) lets mousemove fire in the renderer

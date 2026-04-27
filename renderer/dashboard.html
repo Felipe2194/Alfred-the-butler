@@ -225,6 +225,22 @@
     color: var(--text);
   }
 
+  #alfred-say-btn {
+    align-self: flex-start;
+    flex-shrink: 0;
+    background: none;
+    border: 2px solid var(--accent2);
+    color: var(--accent2);
+    font-size: 14px;
+    width: 30px; height: 30px;
+    cursor: pointer;
+    box-shadow: 2px 2px 0 #000;
+    transition: transform 0.1s steps(1), box-shadow 0.1s steps(1);
+    -webkit-app-region: no-drag;
+  }
+  #alfred-say-btn:hover  { transform: translate(1px,1px); box-shadow: 1px 1px 0 #000; }
+  #alfred-say-btn:active { transform: translate(2px,2px); box-shadow: none; }
+
   /* ── Form controls ──────────────────────────────────────────────────────── */
   .form-group       { margin-bottom: 14px; }
   .form-group label {
@@ -316,6 +332,7 @@
         <span id="alfred-speech-name">▶ ALFRED</span>
         <span id="alfred-speech">Good day. Here is your daily briefing, sir.</span>
       </div>
+      <button id="alfred-say-btn" title="Ask Alfred to say something">💬</button>
     </div>
     <div id="dash-expired"></div>
     <div id="dash-upcoming"></div>
@@ -734,6 +751,10 @@ document.getElementById('ntfy-test-btn').addEventListener('click', async () => {
   status.textContent = ok ? 'Sent! Check your phone ✓' : 'Failed — check your internet or topic name ✗';
   setTimeout(() => status.textContent = '', 4000);
 });
+
+// ── Alfred say button ─────────────────────────────────────────────────────────
+document.getElementById('alfred-say-btn').addEventListener('click', () =>
+  ipcRenderer.invoke('say-random'));
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 load();

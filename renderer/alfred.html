@@ -370,7 +370,7 @@ function showBubble(text) {
   setState('talk');
 
   typewrite(text, () => {
-    const ms = 5000 + text.split('\n').length * 1200;
+    const ms = 3500 + text.split('\n').length * 900;
     bubbleTimer = setTimeout(() => {
       bubble.classList.remove('visible');
       setState('idle');
