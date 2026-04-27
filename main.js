@@ -59,8 +59,10 @@ let checkInterval = null;   // Hourly reminder check
 let randomTimeout = null;   // Random butler quip timer
 
 // ─── Alfred position config ────────────────────────────────────────────────────
-const ALFRED_W = 120;   // Window width  (px)
-const ALFRED_H = 220;   // Window height (px) — extra room for speech bubble
+// Wide enough to contain the speech bubble (270px + padding) without clipping.
+// Tall enough for bubble + sprite stacked vertically.
+const ALFRED_W = 300;   // Window width  (px)
+const ALFRED_H = 340;   // Window height (px)
 
 // ─── Alfred window ─────────────────────────────────────────────────────────────
 function createAlfredWindow() {
@@ -238,8 +240,16 @@ function advanceRecurring(item) {
 }
 
 // Tracks the last date (YYYY-MM-DD) a phone notification was sent.
-// Prevents re-notifying every hourly check for the same active reminder.
-let lastPhoneNotifyDate = '';
+// Persisted in data.json so restarts don't re-trigger ntfy on the same day.
+function getLastPhoneNotifyDate() {
+  try { return loadData().lastPhoneNotifyDate || ''; }
+  catch { return ''; }
+}
+function setLastPhoneNotifyDate(dateStr) {
+  const d = loadData();
+  d.lastPhoneNotifyDate = dateStr;
+  saveData(d);
+}
 
 function checkReminders() {
   // Load the full data object so we can save back advanced recurring dates
@@ -278,8 +288,8 @@ function checkReminders() {
   // checkReminders() runs every hour; without this guard it would spam ntfy
   // all day long for any active reminder, burning through the rate limit fast.
   const today = new Date().toISOString().slice(0, 10);
-  if (lastPhoneNotifyDate !== today) {
-    lastPhoneNotifyDate = today;
+  if (getLastPhoneNotifyDate() !== today) {
+    setLastPhoneNotifyDate(today);
     const hasUrgent = urgent.some(i => i.days <= 0);
     sendPhoneNotification(
       'Alfred - Reminder',

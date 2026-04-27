@@ -4,7 +4,7 @@
   "description": "Alfred, a pixel-art butler that lives on your desktop and reminds you of everything important.",
   "main": "main.js",
   "bin": {
-    "hi": "./bin/hi.js"
+    "hi": "./hi.js"
   },
   "scripts": {
     "start": "electron .",

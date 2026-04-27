@@ -25,30 +25,30 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   html, body {
-    width: 120px; height: 220px;
+    width: 300px; height: 340px;
     background: transparent;
-    overflow: visible;
+    overflow: hidden;
     user-select: none;
     -webkit-app-region: no-drag;
   }
 
   /* ── Speech bubble (8-bit dialog style) ────────────────────────────────── */
+  /* Positioned inside the 300×340 window, above the sprite.                  */
   #bubble {
-    position: fixed;
-    bottom: 218px;
-    left: 50%;
-    transform: translateX(-50%);
+    position: absolute;
+    bottom: 128px;      /* sits just above the sprite (112px + 16px gap)     */
+    right: 0;           /* right-aligned, matching Alfred's position          */
     background: #f0f0ff;
     border: 3px solid #000;
     border-radius: 0;
-    padding: 10px 12px 14px;
+    padding: 10px 12px 18px;
     font-family: 'Press Start 2P', 'Courier New', monospace;
     font-size: 8px;
     color: #0a0a12;
     white-space: pre-wrap;
-    width: 270px;
+    width: 285px;
     box-shadow: 4px 4px 0 #000, 0 0 0 1px #00d4ff;
-    line-height: 1.9;
+    line-height: 2;
     pointer-events: none;
     display: none;
     z-index: 999;
@@ -57,7 +57,7 @@
   #bubble::before {
     content: '▼';
     position: absolute;
-    bottom: 4px; right: 8px;
+    bottom: 5px; right: 10px;
     font-size: 7px;
     color: #00d4ff;
     animation: blink-cur 1s steps(1) infinite;
@@ -66,29 +66,29 @@
     0%, 49% { opacity: 1; }
     50%, 100% { opacity: 0; }
   }
-  /* Bubble tail */
+  /* Bubble tail — points down-right toward Alfred's head */
   #bubble::after {
     content: '';
     position: absolute;
-    bottom: -10px; left: 50%;
-    transform: translateX(-50%);
+    bottom: -10px; right: 40px;
     border: 5px solid transparent;
     border-top-color: #000;
   }
   #bubble.visible {
     display: block;
-    animation: pop-in .25s cubic-bezier(.34,1.56,.64,1) both;
+    animation: pop-in .2s cubic-bezier(.34,1.56,.64,1) both;
   }
   @keyframes pop-in {
-    from { opacity: 0; transform: translateX(-50%) scale(.85) translateY(6px); }
-    to   { opacity: 1; transform: translateX(-50%) scale(1)  translateY(0);   }
+    from { opacity: 0; transform: scale(.9) translateY(4px); }
+    to   { opacity: 1; transform: scale(1)  translateY(0);   }
   }
 
   /* ── Sprite container ───────────────────────────────────────────────────── */
+  /* Bottom-right of the window, mirrored to face left.                        */
   #alfred-wrap {
     position: absolute;
-    bottom: 0; left: 50%;
-    transform: translateX(-50%);
+    bottom: 0; right: 0;
+    transform: scaleX(-1);
     width: 112px; height: 112px;
     cursor: pointer;
   }
@@ -113,13 +113,10 @@
     75%       { transform: translateY(-3px) rotate(1.5deg);  }
   }
 
-  /* State classes control which CSS animation runs on the sprite */
-  #alfred-wrap.idle   #spr { animation: float var(--float-speed) ease-in-out infinite; }
+  /* State classes drive the CSS animation on the sprite image */
+  #alfred-wrap.idle    #spr { animation: float var(--float-speed) ease-in-out infinite; }
   #alfred-wrap.talking #spr { animation: talk  var(--talk-speed)  ease-in-out infinite; }
   #alfred-wrap.walking #spr { animation: none; }
-
-  /* ── Direction: facing right (mirror via parent) ────────────────────────── */
-  #alfred-wrap.facing-right { transform: translateX(-50%) scaleX(-1); }
 
   /* Hover highlight */
   #alfred-wrap:hover #spr { filter: brightness(1.12); }
@@ -187,11 +184,6 @@ function setState(state) {
   }
 }
 
-function setDir(dir) {
-  // dir: -1 = left (default), +1 = right (mirrored)
-  wrap.classList.toggle('facing-right', dir > 0);
-}
-
 // ── Speech bubble ─────────────────────────────────────────────────────────────
 let bubbleTimer = null;
 
@@ -210,7 +202,6 @@ function showBubble(text) {
 
 // ── IPC from main process ─────────────────────────────────────────────────────
 ipcRenderer.on('set-state', (_, s) => setState(s));
-ipcRenderer.on('set-dir',   (_, d) => setDir(d));
 ipcRenderer.on('speak',     (_, t) => showBubble(t));
 
 // ── Click → open dashboard ────────────────────────────────────────────────────

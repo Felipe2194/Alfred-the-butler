@@ -37,7 +37,7 @@ if (command !== 'alfred') {
 }
 
 // ── Launch Alfred ─────────────────────────────────────────────────────────────
-const appDir      = path.resolve(__dirname, '..');
+const appDir      = __dirname;
 const electronBin = require('electron');   // returns path to the electron executable
 
 console.log(ART);
