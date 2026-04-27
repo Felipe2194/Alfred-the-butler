@@ -6,7 +6,6 @@
  * HOW TO CONTRIBUTE:
  *  - Add new reminder categories → edit dashboard.html (CAT_EMOJI map + select options)
  *  - Add new random phrases     → edit the PHRASES array below
- *  - Change walk behavior       → edit WALK_SPEED_PX_S / IDLE_MIN_S / IDLE_MAX_S
  *  - Add new IPC handlers       → add ipcMain.handle() calls near the bottom
  */
 
@@ -58,24 +57,6 @@ let randomTimeout = null;
 const ALFRED_W = 300;
 const ALFRED_H = 340;
 
-// ─── Walker config ─────────────────────────────────────────────────────────────
-const WALK_SPEED_PX_S = 110;  // pixels per second while walking
-const IDLE_MIN_S      =  8;   // minimum idle seconds between walks
-const IDLE_MAX_S      = 18;   // maximum idle seconds between walks
-
-// ─── Walker state ──────────────────────────────────────────────────────────────
-let alfredX        = 0;
-let alfredY        = 0;
-let walkerTimer    = null;   // setTimeout — next walk
-let walkerInterval = null;   // setInterval — active walk step
-let isSpeaking     = false;  // pauses walker while Alfred is talking
-
-// ─── Easing ────────────────────────────────────────────────────────────────────
-// Smooth cubic ease-in-out for natural character movement.
-function easeInOut(t) {
-  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-}
-
 // ─── Multi-screen support ──────────────────────────────────────────────────────
 // Returns the display most likely to have the taskbar (Windows: primary, or
 // whichever has the largest workArea height difference from its total height).
@@ -89,72 +70,18 @@ function getTargetDisplay() {
   }, displays[0]);
 }
 
-// ─── Walker ────────────────────────────────────────────────────────────────────
-function stopWalk() {
-  clearInterval(walkerInterval); walkerInterval = null;
-  clearTimeout(walkerTimer);     walkerTimer    = null;
-}
-
-function scheduleWalk() {
-  if (isSpeaking) return;
-  const ms = (IDLE_MIN_S + Math.floor(Math.random() * (IDLE_MAX_S - IDLE_MIN_S))) * 1000;
-  walkerTimer = setTimeout(doWalk, ms);
-}
-
-function doWalk() {
-  if (!alfredWin || alfredWin.isDestroyed() || isSpeaking) {
-    scheduleWalk();
-    return;
-  }
-
-  const { workArea: wa } = getTargetDisplay();
-  const minX     = wa.x;
-  const maxX     = wa.x + wa.width - ALFRED_W;
-  const targetX  = Math.round(minX + Math.random() * (maxX - minX));
-  const startX   = alfredX;
-  const distance = Math.abs(targetX - startX);
-
-  if (distance < 40) { scheduleWalk(); return; }
-
-  const direction  = targetX > startX ? 'right' : 'left';
-  const durationMs = Math.round((distance / WALK_SPEED_PX_S) * 1000);
-  const startTime  = Date.now();
-
-  sendToAlfred('set-state', { state: 'walk', direction });
-
-  walkerInterval = setInterval(() => {
-    if (!alfredWin || alfredWin.isDestroyed()) {
-      clearInterval(walkerInterval);
-      return;
-    }
-    const elapsed = Date.now() - startTime;
-    const t       = Math.min(elapsed / durationMs, 1);
-    const newX    = Math.round(startX + (targetX - startX) * easeInOut(t));
-
-    alfredX = newX;
-    alfredWin.setPosition(newX, alfredY);
-
-    if (t >= 1) {
-      clearInterval(walkerInterval);
-      walkerInterval = null;
-      sendToAlfred('set-state', { state: 'idle' });
-      scheduleWalk();
-    }
-  }, 16);
-}
-
 // ─── Alfred window ─────────────────────────────────────────────────────────────
 function createAlfredWindow() {
   const { workArea: wa } = getTargetDisplay();
 
-  alfredX = Math.round(wa.x + wa.width  - ALFRED_W - 16);
-  alfredY = Math.round(wa.y + wa.height - ALFRED_H);
+  const x = Math.round(wa.x + wa.width  - ALFRED_W - 16);
+  const y = Math.round(wa.y + wa.height - ALFRED_H);
 
   const isMac = process.platform === 'darwin';
 
   alfredWin = new BrowserWindow({
     width: ALFRED_W, height: ALFRED_H,
-    x: alfredX, y: alfredY,
+    x, y,
     transparent: true,
     frame: false,
     alwaysOnTop: isMac,
@@ -188,8 +115,7 @@ function sendToAlfred(channel, data) {
 // ─── Alfred speaking ───────────────────────────────────────────────────────────
 /**
  * Make Alfred show a speech bubble.
- * Pauses the walker, shows a brief "thinking" animation, then the message.
- * Walker resumes after the bubble auto-closes (signalled via IPC).
+ * Shows a brief "thinking" animation, then the message.
  *
  * @param {string}  text   - Message text (newlines supported)
  * @param {boolean} urgent - Rises above all windows while showing
@@ -197,16 +123,12 @@ function sendToAlfred(channel, data) {
 function speak(text, urgent = false) {
   if (!alfredWin || alfredWin.isDestroyed()) return;
 
-  isSpeaking = true;
-  stopWalk();
-
   if (urgent) alfredWin.setAlwaysOnTop(true, 'screen-saver');
 
   // Brief thinking pause before the actual message
   sendToAlfred('think');
   setTimeout(() => sendToAlfred('speak', text), 800);
 
-  // Reset alwaysOnTop after a safe window (bubble will signal 'bubble-closed')
   if (urgent) {
     const safeMs = 800 + 5000 + text.split('\n').length * 1200 + 4000;
     setTimeout(() => {
@@ -416,11 +338,8 @@ ipcMain.on('set-ignore-mouse', (_, ignore) => {
     alfredWin.setIgnoreMouseEvents(ignore, { forward: true });
 });
 
-// Renderer signals when the speech bubble auto-closes → resume walking.
-ipcMain.on('bubble-closed', () => {
-  isSpeaking = false;
-  scheduleWalk();
-});
+// Renderer signals when the speech bubble auto-closes.
+ipcMain.on('bubble-closed', () => { /* reserved for future use */ });
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
@@ -432,9 +351,6 @@ app.whenReady().then(() => {
   setTimeout(checkReminders, 8000);
   checkInterval = setInterval(checkReminders, 3600000);
   scheduleRandom();
-
-  // Start walker after the startup greeting settles
-  setTimeout(scheduleWalk, 5000);
 });
 
 app.on('window-all-closed', e => e.preventDefault());
@@ -443,5 +359,4 @@ app.on('second-instance', createDashWindow);
 app.on('before-quit', () => {
   clearInterval(checkInterval);
   clearTimeout(randomTimeout);
-  stopWalk();
 });
