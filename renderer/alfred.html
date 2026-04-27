@@ -9,17 +9,65 @@
   and his speech bubble. No framework — pure HTML/CSS/JS.
 
   HOW TO CONTRIBUTE:
-  - Add new states (e.g. 'wave')  → add a CSS @keyframes + handle in setState()
-  - Change walk speed             → edit WALK_MS constant in the script
-  - Change bubble style           → edit #bubble styles
-  - Add walk frames               → add to WALK_FRAMES array + process-sprites.js
+  - Add new themes      → add a body.theme-X block in CSS + entry in THEMES/applyTheme()
+  - Add new states      → add CSS @keyframes + handle in setState()
+  - Add walk frames     → add to WALK_FRAMES + process-sprites.js
+  - Change walk speed   → edit WALK_MS constant
+  - Add sounds          → add entry to SOUNDS array (Web Audio API)
 -->
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 
+  /* ── Theme variables (Classic = default) ────────────────────────────────── */
   :root {
-    --talk-speed:  0.4s;
-    --float-speed: 3s;
+    --bubble-bg:      #f0f0ff;
+    --bubble-border:  #000000;
+    --bubble-glow:    #00d4ff;
+    --bubble-color:   #0a0a12;
+    --bubble-radius:  0px;
+    --cursor-color:   #00d4ff;
+    --float-speed:    3s;
+    --talk-speed:     0.4s;
+  }
+
+  /* Midnight — dark background, orange accents */
+  body.theme-midnight {
+    --bubble-bg:     #1a1a2e;
+    --bubble-border: #ff6b35;
+    --bubble-glow:   #ff6b35;
+    --bubble-color:  #e8d5b7;
+    --bubble-radius: 0px;
+    --cursor-color:  #ff6b35;
+  }
+
+  /* Peach — warm cream, pink border, rounded */
+  body.theme-peach {
+    --bubble-bg:     #fff4ec;
+    --bubble-border: #ff9eb5;
+    --bubble-glow:   #ff9eb5;
+    --bubble-color:  #3d2b1f;
+    --bubble-radius: 14px;
+    --cursor-color:  #ff6b8a;
+  }
+
+  /* Cloud — light gray, blue accents */
+  body.theme-cloud {
+    --bubble-bg:     #e8f0ff;
+    --bubble-border: #6b9fff;
+    --bubble-glow:   #6b9fff;
+    --bubble-color:  #1a2a4a;
+    --bubble-radius: 8px;
+    --cursor-color:  #4a7fff;
+  }
+
+  /* Moss — dark green, terminal phosphor */
+  body.theme-moss {
+    --bubble-bg:     #0d1a0d;
+    --bubble-border: #3aff3a;
+    --bubble-glow:   #3aff3a;
+    --bubble-color:  #a0ffa0;
+    --bubble-radius: 0px;
+    --cursor-color:  #3aff3a;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -32,66 +80,80 @@
     -webkit-app-region: no-drag;
   }
 
-  /* ── Speech bubble (8-bit dialog style) ────────────────────────────────── */
-  /* Positioned inside the 300×340 window, above the sprite.                  */
+  /* ── Speech bubble ──────────────────────────────────────────────────────── */
   #bubble {
     position: absolute;
-    bottom: 128px;      /* sits just above the sprite (112px + 16px gap)     */
-    right: 0;           /* right-aligned, matching Alfred's position          */
-    background: #f0f0ff;
-    border: 3px solid #000;
-    border-radius: 0;
+    bottom: 128px;
+    right: 0;
+    background: var(--bubble-bg);
+    border: 3px solid var(--bubble-border);
+    border-radius: var(--bubble-radius);
     padding: 10px 12px 18px;
     font-family: 'Press Start 2P', 'Courier New', monospace;
     font-size: 8px;
-    color: #0a0a12;
+    color: var(--bubble-color);
     white-space: pre-wrap;
     width: 285px;
-    box-shadow: 4px 4px 0 #000, 0 0 0 1px #00d4ff;
+    box-shadow: 4px 4px 0 var(--bubble-border), 0 0 0 1px var(--bubble-glow);
     line-height: 2;
     pointer-events: none;
     display: none;
     z-index: 999;
+    transition: background 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s;
   }
-  /* Blinking ▼ cursor */
+
+  /* Blinking cursor */
   #bubble::before {
     content: '▼';
     position: absolute;
     bottom: 5px; right: 10px;
     font-size: 7px;
-    color: #00d4ff;
+    color: var(--cursor-color);
     animation: blink-cur 1s steps(1) infinite;
   }
-  @keyframes blink-cur {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
-  }
-  /* Bubble tail — points down-right toward Alfred's head */
+
+  /* Bubble tail — points toward Alfred's head */
   #bubble::after {
     content: '';
     position: absolute;
     bottom: -10px; right: 40px;
     border: 5px solid transparent;
-    border-top-color: #000;
+    border-top-color: var(--bubble-border);
   }
+
   #bubble.visible {
     display: block;
     animation: pop-in .2s cubic-bezier(.34,1.56,.64,1) both;
   }
+
+  /* Thinking — dimmed, spaced dots */
+  #bubble.thinking {
+    opacity: 0.8;
+    letter-spacing: 3px;
+    font-size: 10px;
+  }
+
+  @keyframes blink-cur {
+    0%, 49% { opacity: 1; }
+    50%,100% { opacity: 0; }
+  }
+
   @keyframes pop-in {
     from { opacity: 0; transform: scale(.9) translateY(4px); }
     to   { opacity: 1; transform: scale(1)  translateY(0);   }
   }
 
   /* ── Sprite container ───────────────────────────────────────────────────── */
-  /* Bottom-right of the window, mirrored to face left.                        */
   #alfred-wrap {
     position: absolute;
     bottom: 0; right: 0;
-    transform: scaleX(-1);
     width: 112px; height: 112px;
     cursor: pointer;
   }
+
+  /* Direction flipping — natural sprite faces right */
+  #alfred-wrap.face-left  { transform: scaleX(-1); }
+  #alfred-wrap.face-right { transform: scaleX(1);  }
 
   #spr {
     position: absolute;
@@ -100,25 +162,28 @@
     image-rendering: pixelated;
   }
 
-  /* ── Idle: gentle float ─────────────────────────────────────────────────── */
+  /* ── State animations ───────────────────────────────────────────────────── */
   @keyframes float {
-    0%, 100% { transform: translateY(0);    }
-    50%       { transform: translateY(-4px); }
+    0%,100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px); }
   }
 
-  /* ── Talk: head wobble ──────────────────────────────────────────────────── */
   @keyframes talk {
-    0%, 100% { transform: translateY(0)    rotate(0deg);    }
-    25%       { transform: translateY(-3px) rotate(-1.5deg); }
-    75%       { transform: translateY(-3px) rotate(1.5deg);  }
+    0%,100% { transform: translateY(0)    rotate(0deg);   }
+    25%      { transform: translateY(-3px) rotate(-1.5deg); }
+    75%      { transform: translateY(-3px) rotate(1.5deg);  }
   }
 
-  /* State classes drive the CSS animation on the sprite image */
-  #alfred-wrap.idle    #spr { animation: float var(--float-speed) ease-in-out infinite; }
-  #alfred-wrap.talking #spr { animation: talk  var(--talk-speed)  ease-in-out infinite; }
-  #alfred-wrap.walking #spr { animation: none; }
+  @keyframes think-bob {
+    0%,100% { transform: translateY(0) rotate(0deg); }
+    50%      { transform: translateY(-2px) rotate(1deg); }
+  }
 
-  /* Hover highlight */
+  #alfred-wrap.idle     #spr { animation: float     var(--float-speed) ease-in-out infinite; }
+  #alfred-wrap.talking  #spr { animation: talk      var(--talk-speed)  ease-in-out infinite; }
+  #alfred-wrap.thinking #spr { animation: think-bob 1.2s ease-in-out infinite; }
+  #alfred-wrap.walking  #spr { animation: none; }
+
   #alfred-wrap:hover #spr { filter: brightness(1.12); }
 </style>
 </head>
@@ -126,7 +191,7 @@
 
 <div id="bubble"></div>
 
-<div id="alfred-wrap" class="idle" title="Click to open dashboard">
+<div id="alfred-wrap" class="idle face-left" title="Click to open dashboard">
   <img id="spr" src="../assets/alfred-idle.png" alt="" draggable="false">
 </div>
 
@@ -139,30 +204,118 @@ const spr    = document.getElementById('spr');
 const bubble = document.getElementById('bubble');
 
 // ── Frame sources ─────────────────────────────────────────────────────────────
+// Note: alfred-walk-3.png does not exist — frames are 1, 2, 4.
 const IDLE_FRAME  = '../assets/alfred-idle.png';
 const WALK_FRAMES = [
   '../assets/alfred-walk-1.png',
   '../assets/alfred-walk-2.png',
-  '../assets/alfred-walk-3.png',
   '../assets/alfred-walk-4.png',
 ];
-const WALK_MS = 140;  // ms per walk frame (~7 fps) — edit to taste
+const WALK_MS = 140;  // ms per walk frame (~7 fps)
 
-// Preload all frames so src swaps are instant (no flicker)
+// Preload all frames so src swaps are instant
 [IDLE_FRAME, ...WALK_FRAMES].forEach(src => { const i = new Image(); i.src = src; });
 
-// ── State machine ─────────────────────────────────────────────────────────────
-// States: 'idle' | 'walk' | 'talk'
-let walkTimer  = null;
-let walkIndex  = 0;
+// ── Pixel-perfect hit detection ───────────────────────────────────────────────
+// We sample the alpha of the sprite image at the cursor position.
+// When alpha < 30 (transparent area), clicks pass through to the OS.
+// This matches lil-agents' CGWindowListCreateImage pixel sampling technique,
+// adapted for Electron using a canvas + setIgnoreMouseEvents(forward: true).
+const hitCanvas = document.createElement('canvas');
+hitCanvas.width  = 112;
+hitCanvas.height = 112;
+const hitCtx = hitCanvas.getContext('2d', { willReadFrequently: true });
 
-function setState(state) {
-  // Clear any running walk animation
+function isOverSprite(cx, cy) {
+  const rect = wrap.getBoundingClientRect();
+  const dx   = cx - rect.left;
+  const dy   = cy - rect.top;
+  if (dx < 0 || dy < 0 || dx >= rect.width || dy >= rect.height) return false;
+  try {
+    hitCtx.clearRect(0, 0, 112, 112);
+    hitCtx.drawImage(spr, 0, 0, 112, 112);
+    const px = hitCtx.getImageData(Math.floor(dx), Math.floor(dy), 1, 1).data;
+    return px[3] > 30;
+  } catch {
+    // Fallback: accept clicks in center 70% of wrap bounds
+    return dx > 16 && dx < 95 && dy > 10 && dy < 100;
+  }
+}
+
+// mousemove fires even with setIgnoreMouseEvents(true, { forward: true }) on Windows
+window.addEventListener('mousemove', e => {
+  const over = isOverSprite(e.clientX, e.clientY);
+  ipcRenderer.send('set-ignore-mouse', !over);
+}, { passive: true });
+
+// ── Web Audio notification sounds ─────────────────────────────────────────────
+// 8 distinct 8-bit-style chimes, one chosen at random per notification.
+// Uses Web Audio API — no audio files required.
+let audioCtx = null;
+
+function getAudio() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  return audioCtx;
+}
+
+function tone(freq, dur, type = 'sine', vol = 0.25) {
+  const ctx  = getAudio();
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  gain.gain.setValueAtTime(vol, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + dur);
+}
+
+function chime(freqs, spacing = 0.12) {
+  freqs.forEach((f, i) => setTimeout(() => tone(f, 0.4), i * spacing * 1000));
+}
+
+const SOUNDS = [
+  () => chime([523, 659, 784]),                                                // C-E-G rise
+  () => chime([784, 659, 523]),                                                // G-E-C fall
+  () => chime([440, 554, 659, 880]),                                           // four-note rise
+  () => tone(880, 0.18, 'sine', 0.3),                                         // single ping
+  () => chime([523, 784], 0.08),                                               // quick double
+  () => { tone(660, 0.09, 'square', 0.12); setTimeout(() => tone(880, 0.18), 110); },
+  () => chime([698, 880, 1047]),                                               // F-A-C
+  () => { tone(440, 0.05, 'square', 0.1); setTimeout(() => tone(550, 0.2), 75); },
+];
+
+function playSound() {
+  try { SOUNDS[Math.floor(Math.random() * SOUNDS.length)](); }
+  catch { /* audio context unavailable */ }
+}
+
+// ── Themes ────────────────────────────────────────────────────────────────────
+function applyTheme(theme) {
+  document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
+  if (theme && theme !== 'classic') document.body.classList.add(`theme-${theme}`);
+  try { localStorage.setItem('alfred-theme', theme || 'classic'); } catch {}
+}
+
+// Restore saved theme on load
+try { const t = localStorage.getItem('alfred-theme'); if (t) applyTheme(t); } catch {}
+
+// ── State machine ─────────────────────────────────────────────────────────────
+let walkTimer = null;
+let walkIndex = 0;
+
+function setState(state, direction) {
   clearInterval(walkTimer);
   walkTimer = null;
 
-  // Reset CSS state classes
-  wrap.classList.remove('idle', 'walking', 'talking');
+  wrap.classList.remove('idle', 'walking', 'talking', 'thinking');
+
+  if (direction) {
+    wrap.classList.remove('face-left', 'face-right');
+    wrap.classList.add(direction === 'right' ? 'face-right' : 'face-left');
+  }
 
   if (state === 'walk') {
     wrap.classList.add('walking');
@@ -177,6 +330,10 @@ function setState(state) {
     wrap.classList.add('talking');
     spr.src = IDLE_FRAME;
 
+  } else if (state === 'think') {
+    wrap.classList.add('thinking');
+    spr.src = IDLE_FRAME;
+
   } else {
     // idle
     wrap.classList.add('idle');
@@ -184,25 +341,66 @@ function setState(state) {
   }
 }
 
+// ── Typewriter effect ─────────────────────────────────────────────────────────
+let typeTimer = null;
+
+function typewrite(text, onDone) {
+  clearInterval(typeTimer);
+  bubble.textContent = '';
+  let i = 0;
+  typeTimer = setInterval(() => {
+    bubble.textContent = text.slice(0, ++i);
+    if (i >= text.length) {
+      clearInterval(typeTimer);
+      typeTimer = null;
+      if (onDone) onDone();
+    }
+  }, 22);  // ~45 chars/sec
+}
+
 // ── Speech bubble ─────────────────────────────────────────────────────────────
 let bubbleTimer = null;
 
 function showBubble(text) {
-  bubble.textContent = text;
+  clearTimeout(bubbleTimer);
+  clearInterval(typeTimer);
+
+  bubble.classList.remove('thinking');
   bubble.classList.add('visible');
   setState('talk');
 
+  typewrite(text, () => {
+    const ms = 5000 + text.split('\n').length * 1200;
+    bubbleTimer = setTimeout(() => {
+      bubble.classList.remove('visible');
+      setState('idle');
+      ipcRenderer.send('bubble-closed');  // resume walker in main process
+    }, ms);
+  });
+}
+
+function showThinking() {
   clearTimeout(bubbleTimer);
-  bubbleTimer = setTimeout(() => {
-    bubble.classList.remove('visible');
-    setState('idle');
-    // main.js will resume walking via pauseWalking timeout
-  }, 5000 + text.split('\n').length * 1200);
+  clearInterval(typeTimer);
+  bubble.textContent = '. . .';
+  bubble.classList.add('visible', 'thinking');
+  setState('think');
 }
 
 // ── IPC from main process ─────────────────────────────────────────────────────
-ipcRenderer.on('set-state', (_, s) => setState(s));
-ipcRenderer.on('speak',     (_, t) => showBubble(t));
+ipcRenderer.on('set-state', (_, data) => {
+  if (typeof data === 'string') setState(data);
+  else setState(data.state, data.direction);
+});
+
+ipcRenderer.on('speak', (_, text) => {
+  bubble.classList.remove('thinking');
+  showBubble(text);
+  playSound();
+});
+
+ipcRenderer.on('think',       ()         => showThinking());
+ipcRenderer.on('apply-theme', (_, theme) => applyTheme(theme));
 
 // ── Click → open dashboard ────────────────────────────────────────────────────
 wrap.addEventListener('click', () => ipcRenderer.invoke('open-dash'));

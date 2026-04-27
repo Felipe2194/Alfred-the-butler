@@ -6,7 +6,7 @@
  * HOW TO CONTRIBUTE:
  *  - Add new reminder categories → edit dashboard.html (CAT_EMOJI map + select options)
  *  - Add new random phrases     → edit the PHRASES array below
- *  - Change walk behavior       → edit the Walker section
+ *  - Change walk behavior       → edit WALK_SPEED_PX_S / IDLE_MIN_S / IDLE_MAX_S
  *  - Add new IPC handlers       → add ipcMain.handle() calls near the bottom
  */
 
@@ -21,13 +21,9 @@ const fs    = require('fs');
 const https = require('https');
 
 // ─── Single-instance guard ─────────────────────────────────────────────────────
-// Prevents two Alfreds from running at the same time.
-// A second launch focuses the dashboard instead.
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
 // ─── Data persistence ──────────────────────────────────────────────────────────
-// All user data lives in one JSON file inside %APPDATA%/lifecheck/
-// No database, no cloud — fully local and portable.
 const DATA_FILE = path.join(app.getPath('userData'), 'data.json');
 
 function loadData() {
@@ -51,32 +47,114 @@ function getSirName() {
 
 // ─── Window references ─────────────────────────────────────────────────────────
 let tray      = null;
-let alfredWin = null;   // Transparent floating character window
-let dashWin   = null;   // Dashboard popup
+let alfredWin = null;
+let dashWin   = null;
 
 // ─── Timers ────────────────────────────────────────────────────────────────────
-let checkInterval = null;   // Hourly reminder check
-let randomTimeout = null;   // Random butler quip timer
+let checkInterval = null;
+let randomTimeout = null;
 
-// ─── Alfred position config ────────────────────────────────────────────────────
-// Wide enough to contain the speech bubble (270px + padding) without clipping.
-// Tall enough for bubble + sprite stacked vertically.
-const ALFRED_W = 300;   // Window width  (px)
-const ALFRED_H = 340;   // Window height (px)
+// ─── Alfred dimensions ─────────────────────────────────────────────────────────
+const ALFRED_W = 300;
+const ALFRED_H = 340;
+
+// ─── Walker config ─────────────────────────────────────────────────────────────
+const WALK_SPEED_PX_S = 110;  // pixels per second while walking
+const IDLE_MIN_S      =  8;   // minimum idle seconds between walks
+const IDLE_MAX_S      = 18;   // maximum idle seconds between walks
+
+// ─── Walker state ──────────────────────────────────────────────────────────────
+let alfredX        = 0;
+let alfredY        = 0;
+let walkerTimer    = null;   // setTimeout — next walk
+let walkerInterval = null;   // setInterval — active walk step
+let isSpeaking     = false;  // pauses walker while Alfred is talking
+
+// ─── Easing ────────────────────────────────────────────────────────────────────
+// Smooth cubic ease-in-out for natural character movement.
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+// ─── Multi-screen support ──────────────────────────────────────────────────────
+// Returns the display most likely to have the taskbar (Windows: primary, or
+// whichever has the largest workArea height difference from its total height).
+function getTargetDisplay() {
+  const displays = screen.getAllDisplays();
+  if (displays.length === 1) return displays[0];
+  return displays.reduce((best, d) => {
+    const dWaste = d.bounds.height    - d.workArea.height;
+    const bWaste = best.bounds.height - best.workArea.height;
+    return dWaste > bWaste ? d : best;
+  }, displays[0]);
+}
+
+// ─── Walker ────────────────────────────────────────────────────────────────────
+function stopWalk() {
+  clearInterval(walkerInterval); walkerInterval = null;
+  clearTimeout(walkerTimer);     walkerTimer    = null;
+}
+
+function scheduleWalk() {
+  if (isSpeaking) return;
+  const ms = (IDLE_MIN_S + Math.floor(Math.random() * (IDLE_MAX_S - IDLE_MIN_S))) * 1000;
+  walkerTimer = setTimeout(doWalk, ms);
+}
+
+function doWalk() {
+  if (!alfredWin || alfredWin.isDestroyed() || isSpeaking) {
+    scheduleWalk();
+    return;
+  }
+
+  const { workArea: wa } = getTargetDisplay();
+  const minX     = wa.x;
+  const maxX     = wa.x + wa.width - ALFRED_W;
+  const targetX  = Math.round(minX + Math.random() * (maxX - minX));
+  const startX   = alfredX;
+  const distance = Math.abs(targetX - startX);
+
+  if (distance < 40) { scheduleWalk(); return; }
+
+  const direction  = targetX > startX ? 'right' : 'left';
+  const durationMs = Math.round((distance / WALK_SPEED_PX_S) * 1000);
+  const startTime  = Date.now();
+
+  sendToAlfred('set-state', { state: 'walk', direction });
+
+  walkerInterval = setInterval(() => {
+    if (!alfredWin || alfredWin.isDestroyed()) {
+      clearInterval(walkerInterval);
+      return;
+    }
+    const elapsed = Date.now() - startTime;
+    const t       = Math.min(elapsed / durationMs, 1);
+    const newX    = Math.round(startX + (targetX - startX) * easeInOut(t));
+
+    alfredX = newX;
+    alfredWin.setPosition(newX, alfredY);
+
+    if (t >= 1) {
+      clearInterval(walkerInterval);
+      walkerInterval = null;
+      sendToAlfred('set-state', { state: 'idle' });
+      scheduleWalk();
+    }
+  }, 16);
+}
 
 // ─── Alfred window ─────────────────────────────────────────────────────────────
 function createAlfredWindow() {
-  const { workArea: wa } = screen.getPrimaryDisplay();
+  const { workArea: wa } = getTargetDisplay();
 
-  // Fixed position: bottom-right corner, just above the taskbar/dock.
-  const x = Math.round(wa.x + wa.width  - ALFRED_W - 16);
-  const y = Math.round(wa.y + wa.height - ALFRED_H);
+  alfredX = Math.round(wa.x + wa.width  - ALFRED_W - 16);
+  alfredY = Math.round(wa.y + wa.height - ALFRED_H);
 
   const isMac = process.platform === 'darwin';
 
   alfredWin = new BrowserWindow({
     width: ALFRED_W, height: ALFRED_H,
-    x, y,
+    x: alfredX, y: alfredY,
     transparent: true,
     frame: false,
     alwaysOnTop: isMac,
@@ -89,11 +167,15 @@ function createAlfredWindow() {
 
   if (isMac) alfredWin.setAlwaysOnTop(true, 'floating');
 
+  // Transparent areas pass mouse events to windows underneath.
+  // The renderer will disable this when the cursor is over a visible pixel.
+  alfredWin.setIgnoreMouseEvents(true, { forward: true });
+
   alfredWin.loadFile(path.join(__dirname, 'renderer', 'alfred.html'));
 
   alfredWin.webContents.once('did-finish-load', () => {
     alfredWin.show();
-    sendToAlfred('set-state', 'idle');
+    sendToAlfred('set-state', { state: 'idle' });
   });
 }
 
@@ -103,33 +185,40 @@ function sendToAlfred(channel, data) {
     alfredWin.webContents.send(channel, data);
 }
 
-
 // ─── Alfred speaking ───────────────────────────────────────────────────────────
 /**
  * Make Alfred show a speech bubble.
- * @param {string}  text    - Message text (newlines supported)
- * @param {boolean} urgent  - If true, Alfred rises above all open windows.
- *                            Use urgent=true for reminders, false for quips.
+ * Pauses the walker, shows a brief "thinking" animation, then the message.
+ * Walker resumes after the bubble auto-closes (signalled via IPC).
+ *
+ * @param {string}  text   - Message text (newlines supported)
+ * @param {boolean} urgent - Rises above all windows while showing
  */
 function speak(text, urgent = false) {
   if (!alfredWin || alfredWin.isDestroyed()) return;
-  const ms = 5000 + text.split('\n').length * 1200;
 
+  isSpeaking = true;
+  stopWalk();
+
+  if (urgent) alfredWin.setAlwaysOnTop(true, 'screen-saver');
+
+  // Brief thinking pause before the actual message
+  sendToAlfred('think');
+  setTimeout(() => sendToAlfred('speak', text), 800);
+
+  // Reset alwaysOnTop after a safe window (bubble will signal 'bubble-closed')
   if (urgent) {
-    alfredWin.setAlwaysOnTop(true, 'screen-saver');
-    sendToAlfred('speak', text);
+    const safeMs = 800 + 5000 + text.split('\n').length * 1200 + 4000;
     setTimeout(() => {
       if (alfredWin && !alfredWin.isDestroyed()) alfredWin.setAlwaysOnTop(false);
-    }, ms + 500);
-  } else {
-    sendToAlfred('speak', text);
+    }, safeMs);
   }
 }
 
 // ─── Dashboard window ──────────────────────────────────────────────────────────
 function createDashWindow() {
   if (dashWin && !dashWin.isDestroyed()) { dashWin.focus(); return; }
-  const { workArea: wa } = screen.getPrimaryDisplay();
+  const { workArea: wa } = getTargetDisplay();
   dashWin = new BrowserWindow({
     width: 480, height: 620,
     x: wa.x + wa.width - 500,
@@ -156,21 +245,22 @@ function createTray() {
     { label: 'Show / Hide Alfred', click: () =>
         alfredWin.isVisible() ? alfredWin.hide() : alfredWin.show() },
     { type: 'separator' },
+    {
+      label: 'Theme', submenu: [
+        { label: 'Classic',  click: () => sendToAlfred('apply-theme', 'classic')  },
+        { label: 'Midnight', click: () => sendToAlfred('apply-theme', 'midnight') },
+        { label: 'Peach',    click: () => sendToAlfred('apply-theme', 'peach')    },
+        { label: 'Cloud',    click: () => sendToAlfred('apply-theme', 'cloud')    },
+        { label: 'Moss',     click: () => sendToAlfred('apply-theme', 'moss')     },
+      ],
+    },
+    { type: 'separator' },
     { label: 'Exit', click: () => app.quit() },
   ]));
   tray.on('click', createDashWindow);
 }
 
 // ─── ntfy.sh phone notifications ──────────────────────────────────────────────
-// No dependencies — uses Node's built-in https module.
-// ntfy.sh is a free push-notification service; the user installs the ntfy app
-// on their phone and subscribes to a self-chosen topic name.
-//
-// API: POST https://ntfy.sh/{topic}
-//   Headers: Title, Priority (min/low/default/high/max), Tags (emoji shortcuts)
-//   Body:    plain-text message
-//
-// topicOverride lets the Settings "Send Test" button test before saving.
 function sendPhoneNotification(title, body, priority = 'default', topicOverride = null, tokenOverride = null) {
   const saved = loadData();
   const topic = (topicOverride || (saved.ntfyTopic || '')).trim();
@@ -179,8 +269,7 @@ function sendPhoneNotification(title, body, priority = 'default', topicOverride 
   const token = (tokenOverride !== null ? tokenOverride : (saved.ntfyToken || '')).trim();
 
   return new Promise(resolve => {
-    const payload = Buffer.from(body, 'utf8');
-    // HTTP headers are ASCII-only — strip any non-ASCII chars from title
+    const payload   = Buffer.from(body, 'utf8');
     const safeTitle = title.replace(/[^\x00-\x7F]/g, '').trim() || 'Alfred';
 
     const headers = {
@@ -190,24 +279,13 @@ function sendPhoneNotification(title, body, priority = 'default', topicOverride 
       'Content-Type':   'text/plain; charset=utf-8',
       'Content-Length': payload.length,
     };
-
-    // Bearer token — keeps your topic private so only you receive notifications
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const req = https.request(
-      {
-        hostname: 'ntfy.sh',
-        port:     443,
-        path:     `/${encodeURIComponent(topic)}`,
-        method:   'POST',
-        headers,
-      },
+      { hostname: 'ntfy.sh', port: 443, path: `/${encodeURIComponent(topic)}`, method: 'POST', headers },
       res => resolve(res.statusCode >= 200 && res.statusCode < 300)
     );
-    req.on('error', err => {
-      console.warn('[ntfy] notification failed:', err.message);
-      resolve(false);
-    });
+    req.on('error', err => { console.warn('[ntfy] notification failed:', err.message); resolve(false); });
     req.write(payload);
     req.end();
   });
@@ -215,20 +293,16 @@ function sendPhoneNotification(title, body, priority = 'default', topicOverride 
 
 // ─── Reminder check ────────────────────────────────────────────────────────────
 function getDaysUntil(dateStr) {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const today  = new Date(); today.setHours(0, 0, 0, 0);
   const target = new Date(dateStr); target.setHours(0, 0, 0, 0);
   return Math.ceil((target - today) / 86400000);
 }
 
-// ─── Recurring reminder helper ─────────────────────────────────────────────────
-// If a recurring item's date is in the past, advance it to the next future
-// occurrence. Mutates item.date in place; returns true if the date changed.
-// Called in checkReminders() so the saved data always holds the next due date.
 function advanceRecurring(item) {
   if (!item.recur || item.recur === 'none') return false;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   let d = new Date(item.date + 'T00:00:00');
-  if (d >= today) return false;  // not yet past — nothing to do
+  if (d >= today) return false;
   const n = item.recurEvery || 1;
   while (d < today) {
     if (item.recur === 'years')  d.setFullYear(d.getFullYear() + n);
@@ -239,29 +313,20 @@ function advanceRecurring(item) {
   return true;
 }
 
-// Tracks the last date (YYYY-MM-DD) a phone notification was sent.
-// Persisted in data.json so restarts don't re-trigger ntfy on the same day.
 function getLastPhoneNotifyDate() {
-  try { return loadData().lastPhoneNotifyDate || ''; }
-  catch { return ''; }
+  try { return loadData().lastPhoneNotifyDate || ''; } catch { return ''; }
 }
 function setLastPhoneNotifyDate(dateStr) {
-  const d = loadData();
-  d.lastPhoneNotifyDate = dateStr;
-  saveData(d);
+  const d = loadData(); d.lastPhoneNotifyDate = dateStr; saveData(d);
 }
 
 function checkReminders() {
-  // Load the full data object so we can save back advanced recurring dates
-  const data = loadData();
-  const name = getSirName();
-
-  // Auto-advance any past-due recurring items and persist the changes
+  const data    = loadData();
+  const name    = getSirName();
   const changed = (data.items || []).reduce((acc, i) => advanceRecurring(i) || acc, false);
   if (changed) saveData(data);
 
-  const items = data.items || [];
-
+  const items  = data.items || [];
   const urgent = items.filter(i => {
     if (!i.date) return false;
     const d = getDaysUntil(i.date);
@@ -284,25 +349,16 @@ function checkReminders() {
 
   speak(`${name}, a reminder:\n` + lines.join('\n'), true);
 
-  // Phone notification — once per day maximum.
-  // checkReminders() runs every hour; without this guard it would spam ntfy
-  // all day long for any active reminder, burning through the rate limit fast.
   const today = new Date().toISOString().slice(0, 10);
   if (getLastPhoneNotifyDate() !== today) {
     setLastPhoneNotifyDate(today);
     const hasUrgent = urgent.some(i => i.days <= 0);
-    sendPhoneNotification(
-      'Alfred - Reminder',
-      lines.join('\n'),
-      hasUrgent ? 'high' : 'default'
-    );
+    sendPhoneNotification('Alfred - Reminder', lines.join('\n'), hasUrgent ? 'high' : 'default');
   }
 }
 
 // ─── Random butler phrases ─────────────────────────────────────────────────────
-// Add your own phrases here! Each entry is a function receiving the user's name.
 const PHRASES = [
-  // ── Butler classics ──────────────────────────────────────────────────────────
   n => `Everything alright, ${n}?`,
   n => `Do remember to stay hydrated, ${n}.`,
   n => `A gentleman is always prepared, ${n}.`,
@@ -313,7 +369,6 @@ const PHRASES = [
   n => `A cup of tea would do you well, ${n}.`,
   n => `Have you reviewed your pending items today, ${n}?`,
   n => `A fine day to stay on top of things, ${n}.`,
-  // ── Wayne Manor classics ─────────────────────────────────────────────────────
   n => `Some men just want to watch the world burn, ${n}.\nI, however, prefer order.`,
   n => `Know your limits, Master ${n}.`,
   n => `Why do we fall, ${n}?\nSo that we can learn to pick ourselves up.`,
@@ -327,7 +382,6 @@ const PHRASES = [
 ];
 
 function scheduleRandom() {
-  // Fire every 20–45 minutes
   randomTimeout = setTimeout(() => {
     speak(PHRASES[Math.floor(Math.random() * PHRASES.length)](getSirName()));
     scheduleRandom();
@@ -336,7 +390,7 @@ function scheduleRandom() {
 
 // ─── Startup greeting ──────────────────────────────────────────────────────────
 function greetOnStartup() {
-  const h = new Date().getHours();
+  const h    = new Date().getHours();
   const name = getSirName();
   const greeting = h < 12 ? `Good morning, ${name}.` :
                    h < 19 ? `Good afternoon, ${name}.` :
@@ -345,38 +399,49 @@ function greetOnStartup() {
 }
 
 // ─── IPC handlers ──────────────────────────────────────────────────────────────
-// Add new handlers here when adding features to the dashboard.
 ipcMain.handle('get-data',      ()        => loadData());
 ipcMain.handle('save-data',     (_, data) => { saveData(data); return true; });
 ipcMain.handle('open-dash',     ()        => createDashWindow());
 ipcMain.handle('check-now',     ()        => checkReminders());
 ipcMain.handle('get-data-path', ()        => DATA_FILE);
 ipcMain.handle('update-name',   ()        => true);
-// Test button in Settings — sends a test notification to the given topic
-// without requiring the user to save first.
 ipcMain.handle('ntfy-test', (_, { topic, token }) =>
   sendPhoneNotification('Alfred - Test', 'Test successful! Alfred is ready to serve.', 'default', topic, token));
 
+// Pixel-perfect hit detection — renderer tells us when cursor is over a visible pixel.
+// setIgnoreMouseEvents(true, { forward: true }) lets mousemove fire in the renderer
+// even while clicks pass through, so the renderer can keep checking position.
+ipcMain.on('set-ignore-mouse', (_, ignore) => {
+  if (alfredWin && !alfredWin.isDestroyed())
+    alfredWin.setIgnoreMouseEvents(ignore, { forward: true });
+});
+
+// Renderer signals when the speech bubble auto-closes → resume walking.
+ipcMain.on('bubble-closed', () => {
+  isSpeaking = false;
+  scheduleWalk();
+});
+
 // ─── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  // Hide from macOS Dock — Alfred lives in the menu-bar tray, not the Dock.
   if (process.platform === 'darwin') app.dock?.hide();
 
   createAlfredWindow();
   createTray();
   greetOnStartup();
-  setTimeout(checkReminders, 8000);                        // check 8s after startup
-  checkInterval = setInterval(checkReminders, 3600000);    // then every hour
+  setTimeout(checkReminders, 8000);
+  checkInterval = setInterval(checkReminders, 3600000);
   scheduleRandom();
+
+  // Start walker after the startup greeting settles
+  setTimeout(scheduleWalk, 5000);
 });
 
-// Prevent app from quitting when all windows close — it lives in the tray
 app.on('window-all-closed', e => e.preventDefault());
-
-// Second launch → focus dashboard instead of opening a new instance
 app.on('second-instance', createDashWindow);
 
 app.on('before-quit', () => {
   clearInterval(checkInterval);
   clearTimeout(randomTimeout);
+  stopWalk();
 });

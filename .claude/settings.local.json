@@ -35,7 +35,8 @@
       "Bash(powershell -Command \"winget list GitHub.cli\" 2>&1)",
       "Bash(powershell -Command \"winget install --id GitHub.cli -e --accept-package-agreements --accept-source-agreements\")",
       "Bash(npm uninstall:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }
